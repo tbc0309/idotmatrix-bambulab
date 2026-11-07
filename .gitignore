@@ -1,0 +1,15 @@
+/build/
+/dist/
+/managed_components/
+/sdkconfig
+/sdkconfig.old
+/private/
+/AGENTS.md
+__pycache__/
+*.pyc
+
+# Local development documents and verification material
+/docs/
+/tests/
+/outputs/
+/reports/

@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.22)
+include(${CMAKE_CURRENT_LIST_DIR}/boards/select.cmake)
+set(PROJECT_VER "1.0.2")
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+set(COMPONENTS main)
+project(${MATRIX_BOARD_project})

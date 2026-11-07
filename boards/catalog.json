@@ -1,0 +1,33 @@
+{
+  "lckfb-esp32s3r8n8": {
+    "name": "LCKFB ESP32S3R8N8",
+    "target": "esp32s3",
+    "chipId": 9,
+    "project": "idotmatrix_bambulab",
+    "artifactSuffix": "esp32s3",
+    "flashBytes": 8388608,
+    "psramBytes": 8388608,
+    "image": "boards/lckfb-esp32s3r8n8/board.png"
+  },
+  "seeed-xiao-esp32c6": {
+    "name": "Seeed Studio XIAO ESP32C6",
+    "target": "esp32c6",
+    "chipId": 13,
+    "project": "idotmatrix_bambulab",
+    "artifactSuffix": "esp32c6",
+    "flashBytes": 4194304,
+    "psramBytes": 0,
+    "displayBackend": "ble"
+  },
+  "esp32c3-oled-042": {
+    "name": "ESP32-C3 0.42 OLED",
+    "target": "esp32c3",
+    "chipId": 5,
+    "project": "idotmatrix_bambulab",
+    "artifactSuffix": "esp32c3",
+    "flashBytes": 4194304,
+    "psramBytes": 0,
+    "displayBackend": "oled-ble",
+    "image": "boards/esp32c3-oled-042/board.jpg"
+  }
+}

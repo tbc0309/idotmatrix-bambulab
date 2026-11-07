@@ -1,0 +1,13 @@
+{
+  "project": "idotmatrix-bambulab",
+  "version": "1.0.2",
+  "board": "lckfb-esp32s3r8n8",
+  "boardName": "LCKFB ESP32S3R8N8",
+  "projectName": "idotmatrix_bambulab",
+  "target": "esp32s3",
+  "flashBytes": 8388608,
+  "appSlotBytes": 3604480,
+  "url": "https://github.com/tbc0309/idotmatrix-bambulab/releases/download/1.0.2/lckfb-esp32s3r8n8.bin",
+  "size": 1565392,
+  "sha256": "3c93072c119f13a7df947cd635a26ba4244268e6c02f55142f4e90d39bd741b4"
+}
