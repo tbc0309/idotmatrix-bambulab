@@ -1,0 +1,13 @@
+{
+  "project": "idotmatrix-bambulab",
+  "version": "1.0.2",
+  "board": "esp32c3-oled-042",
+  "boardName": "ESP32-C3 0.42 OLED",
+  "projectName": "idotmatrix_bambulab",
+  "target": "esp32c3",
+  "flashBytes": 4194304,
+  "appSlotBytes": 1966080,
+  "url": "https://github.com/tbc0309/idotmatrix-bambulab/releases/download/1.0.2/esp32c3-oled-042.bin",
+  "size": 1701952,
+  "sha256": "ca1c11b41a8266bae6d9653f54398a399110a0407702c197ffbec004884d4824"
+}

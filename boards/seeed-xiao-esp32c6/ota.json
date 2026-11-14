@@ -1,0 +1,13 @@
+{
+  "project": "idotmatrix-bambulab",
+  "version": "1.0.2",
+  "board": "seeed-xiao-esp32c6",
+  "boardName": "Seeed Studio XIAO ESP32C6",
+  "projectName": "idotmatrix_bambulab",
+  "target": "esp32c6",
+  "flashBytes": 4194304,
+  "appSlotBytes": 1966080,
+  "url": "https://github.com/tbc0309/idotmatrix-bambulab/releases/download/1.0.2/seeed-xiao-esp32c6.bin",
+  "size": 1904352,
+  "sha256": "33fca469fb20f6ad2460e788c88bd092a82b948ff2319c12a239e543236f300c"
+}
