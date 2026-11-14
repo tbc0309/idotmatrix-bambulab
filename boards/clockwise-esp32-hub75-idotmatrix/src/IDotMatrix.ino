@@ -2561,29 +2561,13 @@ void drawDigit3x5NativeScaled(uint8_t d, int16_t x, int16_t y, uint8_t scale, co
   }
 }
 
-#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
-void drawClockwiseClockDigit(uint8_t digit, int x, int y, uint8_t cellWidth,
-                             uint8_t cellHeight, const CRGB& color, bool cutCorners);
-#endif
-
 void drawNative64ClockRow(uint8_t a, uint8_t b, uint8_t c, uint8_t d,
-                          int16_t y, const CRGB &color, bool slash, uint8_t style) {
-#if !defined(IDOTMATRIX_BOARD_CLOCKWISE)
-  (void)style;
+                          int16_t y, const CRGB &color, bool slash) {
   constexpr uint8_t scale=3;
-#endif
   constexpr int16_t width=51;
   const int16_t x0=(64-width)/2;
-#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
-  drawClockwiseClockDigit(a,x0,y,2,3,color,style == 3);
-#else
   drawDigit3x5NativeScaled(a,x0,y,scale,color);
-#endif
-#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
-  drawClockwiseClockDigit(b,x0+12,y,2,3,color,style == 3);
-#else
   drawDigit3x5NativeScaled(b,x0+12,y,scale,color);
-#endif
   const int16_t sx=x0+24;
   if(slash){
     for(uint8_t i=0;i<3;i++){
@@ -2599,54 +2583,23 @@ void drawNative64ClockRow(uint8_t a, uint8_t b, uint8_t c, uint8_t d,
       }
     }
   }
-#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
-  drawClockwiseClockDigit(c,x0+30,y,2,3,color,style == 3);
-#else
   drawDigit3x5NativeScaled(c,x0+30,y,scale,color);
-#endif
-#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
-  drawClockwiseClockDigit(d,x0+42,y,2,3,color,style == 3);
-#else
   drawDigit3x5NativeScaled(d,x0+42,y,scale,color);
-#endif
 }
 
 #if defined(IDOTMATRIX_BOARD_CLOCKWISE)
-void drawClockwiseClockDigit(uint8_t digit, int x, int y, uint8_t cellWidth,
-                             uint8_t cellHeight, const CRGB& color, bool cutCorners) {
-  // Compact clocks use the square glyphs with narrower cells.
-  static constexpr uint8_t square[10][5] = {
-    {0b1111, 0b1001, 0b1001, 0b1001, 0b1111},
-    {0b0010, 0b0110, 0b0010, 0b0010, 0b0111},
-    {0b1111, 0b0001, 0b1111, 0b1000, 0b1111},
-    {0b1111, 0b0001, 0b0111, 0b0001, 0b1111},
-    {0b1001, 0b1001, 0b1111, 0b0001, 0b0001},
-    {0b1111, 0b1000, 0b1111, 0b0001, 0b1111},
-    {0b1111, 0b1000, 0b1111, 0b1001, 0b1111},
-    {0b1111, 0b0001, 0b0010, 0b0010, 0b0010},
-    {0b1111, 0b1001, 0b1111, 0b1001, 0b1111},
-    {0b1111, 0b1001, 0b1111, 0b0001, 0b1111},
-  };
-  static constexpr uint8_t cut[10][5] = {
-    {0b0110, 0b1001, 0b1001, 0b1001, 0b0110},
-    {0b0010, 0b0110, 0b0010, 0b0010, 0b0111},
-    {0b0110, 0b1001, 0b0010, 0b0100, 0b1111},
-    {0b1110, 0b0001, 0b0110, 0b0001, 0b1110},
-    {0b0010, 0b0110, 0b1010, 0b1111, 0b0010},
-    {0b1111, 0b1000, 0b1110, 0b0001, 0b1110},
-    {0b0111, 0b1000, 0b1110, 0b1001, 0b0110},
-    {0b1111, 0b0001, 0b0010, 0b0100, 0b0100},
-    {0b0110, 0b1001, 0b0110, 0b1001, 0b0110},
-    {0b0110, 0b1001, 0b0111, 0b0001, 0b1110},
-  };
+#include "ClockwiseClockGlyphs.h"
+
+void drawClockwiseClockDigit(uint8_t digit, int x, int y, uint8_t style,
+                             const CRGB& color) {
   if (digit > 9) return;
-  const auto& glyph = cutCorners ? cut[digit] : square[digit];
-  for (uint8_t row = 0; row < 5; ++row)
-    for (uint8_t col = 0; col < 4; ++col)
-      if (glyph[row] & (1U << (3 - col)))
-        for (uint8_t dy = 0; dy < cellHeight; ++dy)
-          for (uint8_t dx = 0; dx < cellWidth; ++dx)
-            putPixel(x + col * cellWidth + dx, y + row * cellHeight + dy, color);
+  const auto& glyph = clockwiseClockGlyphs[style][digit];
+  for (uint8_t row = 0; row < 14; ++row)
+    for (uint8_t col = 0; col < 10; ++col)
+      if (glyph[row] & (1U << col))
+        for (uint8_t dy = 0; dy < 2; ++dy)
+          for (uint8_t dx = 0; dx < 2; ++dx)
+            putPixel(x + 2 * col + dx, y + 2 * row + dy, color);
 }
 
 void drawClockwiseRainbowBorder(uint32_t now) {
@@ -2707,8 +2660,8 @@ void renderClock64Combined(uint8_t h, uint8_t m, uint8_t d, uint8_t mo, uint8_t 
 #endif
   const CRGB c = style == 3 ? CRGB::Black : displayColor;
   // WLED reference parity: the time row received the final +4 physical-pixel adjustment.
-  drawNative64ClockRow(h/10,h%10,m/10,m%10,12,c,false,style);
-  drawNative64ClockRow(d/10,d%10,mo/10,mo%10,38,c,true,style);
+  drawNative64ClockRow(h/10,h%10,m/10,m%10,12,c,false);
+  drawNative64ClockRow(d/10,d%10,mo/10,mo%10,38,c,true);
   refreshMatrix();
 }
 
@@ -2818,17 +2771,17 @@ void drawClockwiseHourglass() {
 
 void renderClockwiseClock(uint8_t first, uint8_t second) {
   struct ClockLayout {
-    uint8_t hourX, hourY, minuteX, minuteY, stride, cellWidth, cellHeight, separatorX, separatorY;
+    uint8_t hourX, hourY, hourUnitsX, minuteX, minuteY, minuteUnitsX, separatorX, separatorY;
   };
   constexpr ClockLayout layouts[] = {
-    {16,  8, 16, 36, 20,  4,  4,  8, 40},
-    {10,  2, 30, 34, 18,  4,  5, 50,  8},
-    { 2, 24, 36, 24, 13,  3,  4, 29, 28},
-    {14,  2, 14, 34, 24,  5,  5,  6, 42},
-    {10,  2, 28, 34, 18,  4,  5, 50, 10},
-    {20, 12, 20, 36, 16,  3,  4, 12, 40},
-    {20, 10, 20, 34, 16,  3,  4, 12, 38},
-    {16, 10, 16, 34, 20,  4,  4,  8, 38},
+    {16,  8, 36, 16, 36, 36,  8, 40},
+    {10,  2, 28, 30, 34, 48, 50,  8},
+    { 2, 24, 16, 36, 24, 50, 30, 28},
+    {14,  2, 38, 14, 34, 38,  6, 42},
+    {10,  2, 28, 28, 34, 46, 50, 10},
+    {20, 12, 36, 20, 36, 36, 12, 40},
+    {20, 10, 36, 20, 34, 36, 12, 38},
+    {16, 10, 36, 16, 34, 36,  8, 38},
   };
   const uint8_t style = clockStyle & 7;
   const auto& layout = layouts[style];
@@ -2855,10 +2808,10 @@ void renderClockwiseClock(uint8_t first, uint8_t second) {
   if (style == 1) drawClockwiseChristmasTree();
   if (style == 4) drawClockwiseHourglass();
   if (style == 0) drawClockwiseRainbowBorder(millis());
-  drawClockwiseClockDigit(first / 10, layout.hourX, layout.hourY, layout.cellWidth, layout.cellHeight, color, style == 3);
-  drawClockwiseClockDigit(first % 10, layout.hourX + layout.stride, layout.hourY, layout.cellWidth, layout.cellHeight, color, style == 3);
-  drawClockwiseClockDigit(second / 10, layout.minuteX, layout.minuteY, layout.cellWidth, layout.cellHeight, color, style == 3);
-  drawClockwiseClockDigit(second % 10, layout.minuteX + layout.stride, layout.minuteY, layout.cellWidth, layout.cellHeight, color, style == 3);
+  drawClockwiseClockDigit(first / 10, layout.hourX, layout.hourY, style, color);
+  drawClockwiseClockDigit(first % 10, layout.hourUnitsX, layout.hourY, style, color);
+  drawClockwiseClockDigit(second / 10, layout.minuteX, layout.minuteY, style, color);
+  drawClockwiseClockDigit(second % 10, layout.minuteUnitsX, layout.minuteY, style, color);
   const CRGB separator = style == 2 ? CRGB::White : color;
   if (clockRenderingDate) {
     for (uint8_t row = 0; row < 12; ++row)
