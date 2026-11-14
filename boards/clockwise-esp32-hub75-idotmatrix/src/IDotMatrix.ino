@@ -621,10 +621,11 @@ struct TextState {
   uint8_t backgroundMode = 0;
   uint8_t backgroundR = 0, backgroundG = 0, backgroundB = 0;
   uint8_t meta[MAX_TEXT_GLYPHS][TEXT_GLYPH_META];
-  uint8_t bitmap[MAX_TEXT_GLYPHS][TEXT_MAX_BITMAP_BYTES];
+  uint8_t bitmap[MAX_TEXT_GLYPHS * TEXT_MAX_BITMAP_BYTES];
+  uint16_t bitmapOffset[MAX_TEXT_GLYPHS];
+  uint8_t bitmapWidth[MAX_TEXT_GLYPHS];
   uint8_t glyphWidth = 8;
   uint8_t glyphHeight = 16;
-  uint16_t glyphBytes = 16;
   uint8_t glyphAdvance = 8;
   int16_t offsetX = 0, offsetY = 1;
   uint32_t animationStart = 0;
@@ -3221,11 +3222,11 @@ CRGB getTextPixelColor(int16_t x, int16_t y) {
 }
 
 bool isTextPixel(uint8_t glyph,uint8_t row,uint8_t col) {
-  if (glyph>=textState.glyphCount || row>=textState.glyphHeight || col>=textState.glyphWidth) return false;
-  const uint8_t bytesPerRow=(textState.glyphWidth+7)/8;
-  const uint16_t off=(uint16_t)row*bytesPerRow+(col>>3);
-  if(off>=textState.glyphBytes) return false;
-  return textState.bitmap[glyph][off] & (1U << (col & 7)); // LSB = leftmost pixel in each byte
+  if (glyph>=textState.glyphCount || row>=textState.glyphHeight ||
+      col>=textState.bitmapWidth[glyph]) return false;
+  const uint8_t bytesPerRow=(textState.bitmapWidth[glyph]+7)/8;
+  const uint16_t off=textState.bitmapOffset[glyph]+uint16_t(row)*bytesPerRow+(col>>3);
+  return textState.bitmap[off] & (1U << (col & 7));
 }
 
 uint8_t textGlyphsPerLine() {
@@ -3534,57 +3535,61 @@ bool parseTextPayloadInternal(const uint8_t *data,size_t len,bool carouselContex
   idotMemoryTelemetrySnapshot(carouselContext ? "text.carousel.before_parse" : "text.live.before_parse");
   const uint32_t textTelemetryStartedAtUs = micros();
 #endif
-  uint8_t requested=data[0];
-  uint8_t n=min(requested,(uint8_t)MAX_TEXT_GLYPHS);
-  if(!n) return false;
-
-  const uint8_t marker=data[TEXT_GLOBAL_HEADER];
-  uint8_t glyphWidth=0,glyphHeight=0;
-  uint16_t glyphBytes=0;
-  if(marker==0x02 || marker==0x03){ glyphWidth=8; glyphHeight=16; glyphBytes=16; }
-  else if(marker==0x05 || marker==0x06){ glyphWidth=16; glyphHeight=32; glyphBytes=64; }
-  else if(marker==0x08 || marker==0x09){ glyphWidth=32; glyphHeight=64; glyphBytes=256; }
-  else {
-    const size_t payloadBytes=len-TEXT_GLOBAL_HEADER;
-    if(payloadBytes % requested != 0) {
-#if DEBUG_SERIAL
-      Serial.print("TEXT unsupported glyph marker 0x"); Serial.println(marker,HEX);
-#endif
-      return false;
+  const uint16_t requested=uint16_t(data[0]) | uint16_t(data[1])<<8;
+  if (!requested || requested>MAX_TEXT_GLYPHS) return false;
+  struct GlyphRecord { uint8_t width, height; };
+  static constexpr GlyphRecord formats[] = {
+    {0,0}, {0,0}, {8,16}, {16,16}, {0,0}, {16,32},
+    {32,32}, {32,64}, {64,64},
+  };
+  auto decodeRecords = [&](GlyphRecord uniform, bool store) {
+    size_t input=TEXT_GLOBAL_HEADER, output=0;
+    uint8_t height=0, width=0;
+    for (uint16_t g=0; g<requested; ++g) {
+      if (len-input<TEXT_GLYPH_META) return false;
+      const uint8_t marker=data[input];
+      const auto format=uniform.width ? uniform :
+          (marker<sizeof(formats)/sizeof(formats[0]) ? formats[marker] : GlyphRecord{0,0});
+      if (!format.width || (height && height!=format.height)) return false;
+      height=format.height;
+      width=max(width,format.width);
+      const size_t bytes=size_t(format.width/8)*height;
+      if (bytes>len-input-TEXT_GLYPH_META || bytes>sizeof(textState.bitmap)-output) return false;
+      if (store) {
+        memcpy(textState.meta[g],data+input,TEXT_GLYPH_META);
+        textState.bitmapOffset[g]=output;
+        textState.bitmapWidth[g]=format.width;
+        memcpy(textState.bitmap+output,data+input+TEXT_GLYPH_META,bytes);
+      }
+      input+=TEXT_GLYPH_META+bytes;
+      output+=bytes;
     }
-    const size_t inferredRecordBytes=payloadBytes/requested;
-    if(inferredRecordBytes<TEXT_GLYPH_META) return false;
-    const size_t inferredGlyphBytes=inferredRecordBytes-TEXT_GLYPH_META;
-    if(inferredGlyphBytes==16){ glyphWidth=8; glyphHeight=16; glyphBytes=16; }
-    else if(inferredGlyphBytes==64){ glyphWidth=16; glyphHeight=32; glyphBytes=64; }
-    else if(inferredGlyphBytes==256){ glyphWidth=32; glyphHeight=64; glyphBytes=256; }
-    else {
-#if DEBUG_SERIAL
-      Serial.print("TEXT unsupported glyph marker 0x"); Serial.print(marker,HEX);
-      Serial.print(" recordBytes="); Serial.println(inferredRecordBytes);
-#endif
-      return false;
+    if (input!=len) return false;
+    if (store) {
+      textState.glyphWidth=width;
+      textState.glyphHeight=height;
+      textState.glyphAdvance=width;
     }
+    return true;
+  };
+  GlyphRecord uniform{0,0};
+  if (!decodeRecords(uniform,false)) {
+    const size_t bytes=(len-TEXT_GLOBAL_HEADER)/requested;
+    if (bytes==TEXT_GLYPH_META+16) uniform={8,16};
+    else if (bytes==TEXT_GLYPH_META+64) uniform={16,32};
+    else if (bytes==TEXT_GLYPH_META+256) uniform={32,64};
+    else return false;
+    if (!decodeRecords(uniform,false)) return false;
   }
-  const size_t recordBytes=TEXT_GLYPH_META+(size_t)glyphBytes;
-  const size_t need=TEXT_GLOBAL_HEADER+(size_t)requested*recordBytes;
-  if(len<need) return false;
-
-  textState.valid=true; textState.glyphCount=n;
-  textState.glyphWidth=glyphWidth; textState.glyphHeight=glyphHeight;
-  textState.glyphBytes=glyphBytes; textState.glyphAdvance=glyphWidth;
+  if (!decodeRecords(uniform,true)) return false;
+  textState.valid=true;
+  textState.glyphCount=requested;
   textState.motionEffect=data[4]; textState.speed=data[5]; textState.colorMode=data[6];
   textState.colorR=data[7]; textState.colorG=data[8]; textState.colorB=data[9];
   textState.backgroundMode=data[10]; textState.backgroundR=data[11]; textState.backgroundG=data[12]; textState.backgroundB=data[13];
-  for(uint8_t g=0;g<n;g++){
-    size_t base=TEXT_GLOBAL_HEADER+(size_t)g*recordBytes;
-    for(uint8_t i=0;i<TEXT_GLYPH_META;i++) textState.meta[g][i]=data[base+i];
-    memset(textState.bitmap[g],0,TEXT_MAX_BITMAP_BYTES);
-    memcpy(textState.bitmap[g],data+base+TEXT_GLYPH_META,glyphBytes);
-  }
 #if DEBUG_SERIAL
-  Serial.print("TEXT glyphs=");Serial.print(n);Serial.print(" size=");Serial.print(glyphWidth);Serial.print('x');Serial.print(glyphHeight);
-  Serial.print(" marker=0x");Serial.println(marker,HEX);
+  Serial.print("TEXT glyphs="); Serial.print(textState.glyphCount);
+  Serial.print(" height="); Serial.println(textState.glyphHeight);
 #endif
   resetTextPosition();
   if(carouselContext){
@@ -6179,7 +6184,8 @@ bool processBulkPacket(const uint8_t *data,size_t len){
     const uint8_t marker=data[4];
     const uint32_t total=(uint32_t)data[5]|((uint32_t)data[6]<<8)|((uint32_t)data[7]<<16)|((uint32_t)data[8]<<24);
     const uint32_t expected=(uint32_t)NUM_LEDS*3UL;
-    if(total==expected){
+    const bool halfSize=MATRIX_WIDTH==64 && MATRIX_HEIGHT==64 && total==expected/4;
+    if(total==expected || halfSize){
       const uint8_t *payload=data+9;
       const size_t payloadSize=len-9;
       if(marker==0x00){
@@ -6226,7 +6232,7 @@ bool processBulkPacket(const uint8_t *data,size_t len){
       if(complete){
         switchDisplayMode(DISPLAY_GRAFFITI);
         for(uint8_t y=0;y<MATRIX_HEIGHT;y++) for(uint8_t x=0;x<MATRIX_WIDTH;x++){
-          const uint16_t pix=(uint16_t)y*MATRIX_WIDTH+x;
+          const uint16_t pix=halfSize ? uint16_t(y/2)*32+x/2 : uint16_t(y)*MATRIX_WIDTH+x;
           const uint32_t o=(uint32_t)pix*3UL;
           framebuffer[logicalIndex(x,y)]=CRGB(graffitiRaster.data[o],graffitiRaster.data[o+1],graffitiRaster.data[o+2]);
         }
@@ -7162,7 +7168,13 @@ void processFA02Packet(const uint8_t *data,size_t len){
     }
     // ACK compatibility is preserved even when malformed fields are ignored;
     // negative/error ACK semantics are not yet experimentally established.
-    sendCommandAck(0x01,0x80); return;
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+    // The Android time-sync callback uses this reply to initialize its canvas size.
+    sendDeviceInfo();
+#else
+    sendCommandAck(0x01,0x80);
+#endif
+    return;
   }
 
   if(len==5 && cmd==0x07 && sub==0x01){
@@ -7194,9 +7206,18 @@ void processFA02Packet(const uint8_t *data,size_t len){
   }
 
   if(len==5 && cmd==0x04 && sub==0x01){
-    bool enter=data[4]!=0;
-    if(enter && !diyMode){ switchDisplayMode(DISPLAY_GRAFFITI); clearFramebuffer(); refreshMatrix(); }
-    diyMode=enter; sendCommandAck(cmd,sub); return;
+    const uint8_t mode=data[4];
+    if (mode==1) {
+      resetGraffitiRaster();
+      switchDisplayMode(DISPLAY_GRAFFITI);
+      clearFramebuffer();
+      refreshMatrix();
+    } else if (mode==3) {
+      switchDisplayMode(DISPLAY_GRAFFITI);
+    }
+    diyMode=mode==1 || mode==3;
+    sendCommandAck(cmd,sub);
+    return;
   }
 
   if(len==5 && cmd==0x04 && sub==0x80){
