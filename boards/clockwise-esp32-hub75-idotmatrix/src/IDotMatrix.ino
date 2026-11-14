@@ -2001,7 +2001,11 @@ uint8_t effectiveBrightnessPercent() {
   uint8_t v = brightnessPercent;
   if (isEnergySavingActive()) {
     uint8_t r = min((uint8_t)100, energySaving.reductionPercent);
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+    v = min(v, r);
+#else
     v = ((uint16_t)v * (100 - r)) / 100;
+#endif
   }
   return v;
 }
