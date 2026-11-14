@@ -66,3 +66,5 @@ Enclosure files for the LCKFB ESP32S3R8N8 development board. Open them in Bambu 
 Clockwise 64×64 P2.5 four-clip diffuser: [download STL](case/clockwise-esp32-hub75/clockwise-hub75-64x64-p2.5-diffuser-4clips.stl).
 
 [Project](https://github.com/tbc0309/idotmatrix-bambulab) · [License](LICENSE) · [Third-party notices](THIRD-PARTY.md)
+
+[Clockwise 64×64 · iDotMatrix App firmware](boards/clockwise-esp32-hub75-idotmatrix/README.md) for Bluetooth control from the mobile app.

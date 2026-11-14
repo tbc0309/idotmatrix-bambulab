@@ -1,0 +1,10 @@
+# iDotMatrix ESP32 Emulator - Waveshare ESP32-S3-RGB-Matrix 32 MB OTA layout
+# Geometry intentionally matches the WLED 32 MB Waveshare baseline so USB
+# migration does not relocate ota_1 or the filesystem.
+# Name,     Type, SubType, Offset,    Size,       Flags
+nvs,        data, nvs,     0x9000,    0x5000,
+otadata,    data, ota,     0xE000,    0x2000,
+ota_0,      app,  ota_0,   0x10000,   0x300000,
+ota_1,      app,  ota_1,   0x310000,  0x300000,
+spiffs,     data, spiffs,  0x610000,  0x19E0000,
+coredump,   data, coredump,0x1FF0000, 0x10000,

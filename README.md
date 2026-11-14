@@ -65,3 +65,5 @@ Clockwise 的后台标题为 **3D Print Pixel Monitor**。在「板载像素屏�
 Clockwise 64×64 P2.5 四卡扣面盖：[下载 STL](case/clockwise-esp32-hub75/clockwise-hub75-64x64-p2.5-diffuser-4clips.stl)。
 
 [项目主页](https://github.com/tbc0309/idotmatrix-bambulab) · [许可](LICENSE) · [第三方声明](THIRD-PARTY.md)
+
+[Clockwise 64×64 · iDotMatrix App 固件](boards/clockwise-esp32-hub75-idotmatrix/README.md)，适用于手机 App 蓝牙控制。
