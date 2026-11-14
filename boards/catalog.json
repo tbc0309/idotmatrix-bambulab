@@ -52,5 +52,14 @@
     "flashBytes": 4194304,
     "psramBytes": 0,
     "displayBackend": "hub75"
+  },
+  "clockwise-esp32-hub75-idotmatrix": {
+    "name": "Clockwise ESP32 + HUB75 64×64 · iDotMatrix App",
+    "target": "esp32",
+    "chipId": 0,
+    "project": "idotmatrix_app",
+    "flashBytes": 4194304,
+    "psramBytes": 0,
+    "displayBackend": "hub75"
   }
 }
