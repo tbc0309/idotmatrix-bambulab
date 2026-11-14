@@ -47,7 +47,7 @@
 | <img src="boards/seeed-xiao-esp32c6/board.png" width="140" alt="Seeed Studio XIAO ESP32C6"> | [Seeed Studio XIAO ESP32C6](https://wiki.seeedstudio.com/cn/xiao_esp32c6_getting_started/) | ESP32-C6 · 4 MB Flash · 512 KB SRAM | 支持 | ¥27.00 / ≈US$4.05 |
 | <img src="boards/esp32c3-oled-042/board.jpg" width="140" alt="ESP32-C3 0.42 OLED"> | [ESP32-C3 0.42 OLED](boards/esp32c3-oled-042/README.md) | ESP32-C3 · 4 MB Flash · 400 KB SRAM | 板载 OLED 状态显示，支持外接像素屏 | ¥14.80 / ≈US$2.22 |
 | <img src="boards/esp32c3-rgb24/board.png" width="140" alt="ESP32-C3 24 RGB Ring"> | [ESP32-C3 24 RGB Ring](boards/esp32c3-rgb24/README.md) | ESP32-C3 · 4 MB Flash · 400 KB SRAM | 24 灯环时钟与打印状态，支持外接像素屏 | ¥18.30 / ≈US$2.74 |
-| — | [Clockwise ESP32 + HUB75 64x64](boards/clockwise-esp32-hub75/README.md) | ESP32 · 4 MB Flash · 520 KB SRAM | 直驱 64×64 HUB75 灯板，可选外接蓝牙像素屏 | — |
+| <img src="boards/clockwise-esp32-hub75/board.png" width="140" alt="Clockwise ESP32 + HUB75 64x64"> | [Clockwise ESP32 + HUB75 64x64](boards/clockwise-esp32-hub75/README.md) | ESP32 · 4 MB Flash · 520 KB SRAM | 直驱 64×64 HUB75 灯板，可选外接蓝牙像素屏 | — |
 
 Clockwise 的配网热点无需密码。灯板使用 5V 电源，通过 HUB75 排线连接。
 

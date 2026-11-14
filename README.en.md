@@ -48,7 +48,7 @@ The ESP32-C3 OLED shows status and print progress in large text. While idle, it 
 | <img src="boards/seeed-xiao-esp32c6/board.png" width="140" alt="Seeed Studio XIAO ESP32C6"> | [Seeed Studio XIAO ESP32C6](https://wiki.seeedstudio.com/xiao_esp32c6_getting_started/) | ESP32-C6 · 4 MB Flash · 512 KB SRAM | Supported | ¥27.00 / ≈US$4.05 |
 | <img src="boards/esp32c3-oled-042/board.jpg" width="140" alt="ESP32-C3 0.42 OLED"> | [ESP32-C3 0.42 OLED](boards/esp32c3-oled-042/README.md) | ESP32-C3 · 4 MB Flash · 400 KB SRAM | Onboard OLED status and external pixel display | ¥14.80 / ≈US$2.22 |
 | <img src="boards/esp32c3-rgb24/board.png" width="140" alt="ESP32-C3 24 RGB Ring"> | [ESP32-C3 24 RGB Ring](boards/esp32c3-rgb24/README.md) | ESP32-C3 · 4 MB Flash · 400 KB SRAM | Onboard clock and print status; optional external pixel display | ¥18.30 / ≈US$2.74 |
-| — | [Clockwise ESP32 + HUB75 64x64](boards/clockwise-esp32-hub75/README.md) | ESP32 · 4 MB Flash · 520 KB SRAM | Direct 64×64 HUB75 display, optional external Bluetooth display | — |
+| <img src="boards/clockwise-esp32-hub75/board.png" width="140" alt="Clockwise ESP32 + HUB75 64x64"> | [Clockwise ESP32 + HUB75 64x64](boards/clockwise-esp32-hub75/README.md) | ESP32 · 4 MB Flash · 520 KB SRAM | Direct 64×64 HUB75 display, optional external Bluetooth display | — |
 
 Clockwise uses an open provisioning hotspot and requires a 5 V panel supply.
 
