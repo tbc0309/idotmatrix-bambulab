@@ -8,6 +8,6 @@
   "flashBytes": 4194304,
   "appSlotBytes": 1966080,
   "url": "https://github.com/tbc0309/idotmatrix-bambulab/releases/download/1.0.2/seeed-xiao-esp32c6.bin",
-  "size": 1904352,
-  "sha256": "33fca469fb20f6ad2460e788c88bd092a82b948ff2319c12a239e543236f300c"
+  "size": 1908640,
+  "sha256": "8d6d2c974b897496171e4ce0cdb895b74f045d5a01e5b49529d7ce346f795437"
 }

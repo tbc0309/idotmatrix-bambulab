@@ -139,3 +139,11 @@ button:not(.primary):not(.danger):not(:disabled):hover{background:var(--green-ti
 button:not(.primary):not(.danger):not(:disabled):active{background:var(--green-tint-hover);border-color:var(--green-hover)}
 button:focus-visible,a:focus-visible{outline:2px solid var(--green-action);outline-offset:2px}
 .setup .wifi-search{grid-template-columns:minmax(0,1fr) minmax(112px,max-content)} .setup .wifi-search>button{white-space:nowrap;padding-inline:14px}
+
+html[data-display=hub75] [data-panel=pixel]{align-items:stretch}
+html[data-display=hub75] #pixel-form{display:flex;flex-direction:column}
+html[data-display=hub75] #pixel-form>.form-grid{display:flex;flex-direction:column;flex:1}
+html[data-display=hub75] #pixel-form .form-actions{margin-top:auto}
+html[data-display=hub75] .pixel-controls{align-items:center}
+.rotation-control{display:flex;align-items:center;gap:8px;order:1}
+.rotation-control output{min-width:3ch;font-variant-numeric:tabular-nums}

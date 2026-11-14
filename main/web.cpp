@@ -1,8 +1,10 @@
 #include "app.h"
 #include "board.h"
 #include "firmware_writer.h"
+#ifndef MATRIX_BOARD_HUB75
 #include "ported/features/pixel_screen/connection.h"
 #include "ported/platform/idf/ble_runtime.h"
+#endif
 #include <esp_http_server.h>
 #include <esp_ota_ops.h>
 #include <esp_app_desc.h>
@@ -66,9 +68,15 @@ esp_err_t get(httpd_req_t *r){
  );if(!d.capacity())return error(r,503,"no_memory");
  if(!strcmp(r->uri,"/api/config"))configPublic(d.to<JsonObject>());
  else if(!strcmp(r->uri,"/api/backup")){configBackup(d.to<JsonObject>());httpd_resp_set_hdr(r,"Content-Disposition","attachment; filename=idotmatrix-bambulab-backup.json");}
- else if(!strcmp(r->uri,"/api/status")){d["project"]="idotmatrix-bambulab";d["version"]=esp_app_get_description()->version;d["uptime"]=now()/1000;d["board"]["id"]=board::id;d["board"]["name"]=board::name;d["board"]["target"]=board::target;updateStatus(d.createNestedObject("onlineUpdate"));{std::lock_guard<std::recursive_mutex> lock(guard);auto accounts=d.createNestedArray("accounts");for(JsonObjectConst a:config["accounts"].as<JsonArrayConst>()){auto item=accounts.createNestedObject();item["id"]=a["id"];cloudAccountHealth(a["id"]|"",item);}}networkStatus(d.createNestedObject("network"));printerStatus(d.createNestedObject("printer"));pixelStatus(d.createNestedObject("pixel"));xtouch_ble::status(d.createNestedObject("bluetooth"));d["memory"]["internalFree"]=heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);d["memory"]["internalLargest"]=heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);d["memory"]["internalMinimum"]=heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);d["memory"]["psramFree"]=heap_caps_get_free_size(MALLOC_CAP_SPIRAM);d["ota"]["running"]=esp_ota_get_running_partition()->address;auto *next=esp_ota_get_next_update_partition(nullptr);d["ota"]["next"]=next?next->address:0;}
+ else if(!strcmp(r->uri,"/api/status")){d["project"]="idotmatrix-bambulab";d["version"]=esp_app_get_description()->version;d["uptime"]=now()/1000;d["board"]["id"]=board::id;d["board"]["name"]=board::name;d["board"]["target"]=board::target;updateStatus(d.createNestedObject("onlineUpdate"));{std::lock_guard<std::recursive_mutex> lock(guard);auto accounts=d.createNestedArray("accounts");for(JsonObjectConst a:config["accounts"].as<JsonArrayConst>()){auto item=accounts.createNestedObject();item["id"]=a["id"];cloudAccountHealth(a["id"]|"",item);}}networkStatus(d.createNestedObject("network"));printerStatus(d.createNestedObject("printer"));pixelStatus(d.createNestedObject("pixel"));
+#ifndef MATRIX_BOARD_HUB75
+ xtouch_ble::status(d.createNestedObject("bluetooth"));
+#endif
+ d["memory"]["internalFree"]=heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);d["memory"]["internalLargest"]=heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);d["memory"]["internalMinimum"]=heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);d["memory"]["psramFree"]=heap_caps_get_free_size(MALLOC_CAP_SPIRAM);d["ota"]["running"]=esp_ota_get_running_partition()->address;auto *next=esp_ota_get_next_update_partition(nullptr);d["ota"]["next"]=next?next->address:0;}
  else if(!strcmp(r->uri,"/api/wifi/scan"))wifiScanStatus(d.to<JsonObject>());
+#ifndef MATRIX_BOARD_HUB75
  else if(!strcmp(r->uri,"/api/pixel/scan"))pixel_screen::connectionScanStatus(d.to<JsonObject>());
+#endif
  else if(!strcmp(r->uri,"/api/cloud")||!strcmp(r->uri,"/api/printer/validate"))cloudStatus(d.to<JsonObject>());
  else return error(r,400,"unknown_api");return send(r,d);
 }
@@ -95,7 +103,7 @@ esp_err_t post(httpd_req_t *r){
   if(!strcmp(r->uri,"/api/provision")){std::string reason;if(!provisionWifi(input,reason))return error(r,400,reason.c_str());}
   else if(!wifiScan())return error(r,409,"scan_busy");output["ok"]=true;return send(r,output);
  }
- bool login=!strcmp(r->uri,"/api/login");if(!login&&!authorized(r))return error(r,401,"login_required");if(!login&&adminPasswordChangeRequired()&&strcmp(r->uri,"/api/password")&&strcmp(r->uri,"/api/logout")&&strcmp(r->uri,"/api/preferences"))return error(r,403,"password_change_required");DynamicJsonDocument input(login ? 512 : configLimit),output(1024);if(!body(r,input))return error(r,400,"invalid_json");
+ bool login=!strcmp(r->uri,"/api/login");if(!login&&!authorized(r))return error(r,401,"login_required");if(!login&&adminPasswordChangeRequired()&&strcmp(r->uri,"/api/password")&&strcmp(r->uri,"/api/logout")&&strcmp(r->uri,"/api/preferences"))return error(r,403,"password_change_required");DynamicJsonDocument input(login||!strcmp(r->uri,"/api/preferences") ? 512 : configLimit),output(1024);if(!body(r,input))return error(r,400,"invalid_json");
  if(login){if(uint32_t(now()-loginAt)>60000){loginAt=now();attempts=0;}if(++attempts>10)return error(r,429,"try_later");if(!input["password"].is<const char*>()||!adminVerify(input["password"].as<const char*>()))return error(r,401,"wrong_password");char token[65];for(unsigned i=0;i<8;i++)snprintf(token+i*8,9,"%08lx",(unsigned long)esp_random());if(sessions.size()>=4)sessions.erase(sessions.begin());sessions.push_back({token,now()+12*60*60*1000});output["token"]=std::string(token);output["passwordChangeRequired"]=adminPasswordChangeRequired();preferencesPublic(output.createNestedObject("preferences"));attempts=0;}
  else if(!strcmp(r->uri,"/api/config")){std::string reason;if(!configSave(input,reason))return error(r,400,reason.c_str());output["ok"]=true;}
  else if(!strcmp(r->uri,"/api/preferences")){std::string reason;if(!preferencesSave(input,reason))return error(r,400,reason.c_str());preferencesPublic(output.to<JsonObject>());}
@@ -103,7 +111,9 @@ esp_err_t post(httpd_req_t *r){
  else if(!strcmp(r->uri,"/api/logout")){auto token=bearer(r);sessions.erase(std::remove_if(sessions.begin(),sessions.end(),[&](const AdminSession &s){return sameToken(s.token,token);}),sessions.end());output["ok"]=true;}
  else if(!strcmp(r->uri,"/api/password")){if(!strcmp(input["password"]|"","12345678"))return error(r,400,"password_default");if(adminPasswordChangeRequired()&&(!input["confirmation"].is<const char*>()||strcmp(input["password"]|"",input["confirmation"]|"")))return error(r,400,"password_mismatch");if(!input["password"].is<const char*>()||!adminChange(input["password"].as<const char*>()))return error(r,400,"password_length");sessions.clear();output["ok"]=true;}
  else if(!strcmp(r->uri,"/api/wifi/scan")){if(!wifiScan())return error(r,409,"scan_busy");output["ok"]=true;}
+#ifndef MATRIX_BOARD_HUB75
  else if(!strcmp(r->uri,"/api/pixel/scan")){if(!pixel_screen::connectionScanStart())return error(r,409,"scan_busy");output["ok"]=true;}
+#endif
  else if(!strcmp(r->uri,"/api/printer/validate")){if(cloudBackgroundBusy())return error(r,409,"busy");input["action"]="validate_lan";input["region"]="cn";if(!cloudStart(input))return error(r,409,"cloud_busy_or_invalid");output["ok"]=true;}
  else if(!strcmp(r->uri,"/api/cloud")){if(cloudBackgroundBusy())return error(r,409,"busy");if(!cloudStart(input))return error(r,409,"cloud_busy_or_invalid");output["ok"]=true;}
  else if(!strcmp(r->uri,"/api/cloud/clear")){cloudClear();output["ok"]=true;}
@@ -135,7 +145,15 @@ void webBegin(){httpd_config_t c=HTTPD_DEFAULT_CONFIG();c.max_uri_handlers=48;c.
  }
 
  for(const char *path:{"/","/printer-manager.js","/app.js","/style.css","/pixel-art.js","/locales.js","/i18n.js","/forms.js","/timezones.js","/timezone-picker.js","/online-update.js"}){httpd_uri_t u{};u.uri=path;u.method=HTTP_GET;u.handler=page;ESP_ERROR_CHECK(httpd_register_uri_handler(server,&u));}
- for(const char *path:{"/api/health","/api/config","/api/backup","/api/status","/api/wifi/scan","/api/pixel/scan","/api/cloud","/api/printer/validate","/api/provision"}){httpd_uri_t u{};u.uri=path;u.method=HTTP_GET;u.handler=get;ESP_ERROR_CHECK(httpd_register_uri_handler(server,&u));}
- for(const char *path:{"/api/login","/api/logout","/api/config","/api/restore","/api/password","/api/wifi/scan","/api/pixel/scan","/api/cloud","/api/cloud/clear","/api/firmware","/api/setup","/api/restart","/api/printer/validate","/api/update/check","/api/update/install","/api/provision","/api/preferences"}){httpd_uri_t u{};u.uri=path;u.method=HTTP_POST;u.handler=post;ESP_ERROR_CHECK(httpd_register_uri_handler(server,&u));}
+ for(const char *path:{"/api/health","/api/config","/api/backup","/api/status","/api/wifi/scan",
+#ifndef MATRIX_BOARD_HUB75
+ "/api/pixel/scan",
+#endif
+ "/api/cloud","/api/printer/validate","/api/provision"}){httpd_uri_t u{};u.uri=path;u.method=HTTP_GET;u.handler=get;ESP_ERROR_CHECK(httpd_register_uri_handler(server,&u));}
+ for(const char *path:{"/api/login","/api/logout","/api/config","/api/restore","/api/password","/api/wifi/scan",
+#ifndef MATRIX_BOARD_HUB75
+ "/api/pixel/scan",
+#endif
+ "/api/cloud","/api/cloud/clear","/api/firmware","/api/setup","/api/restart","/api/printer/validate","/api/update/check","/api/update/install","/api/provision","/api/preferences"}){httpd_uri_t u{};u.uri=path;u.method=HTTP_POST;u.handler=post;ESP_ERROR_CHECK(httpd_register_uri_handler(server,&u));}
 }
 }

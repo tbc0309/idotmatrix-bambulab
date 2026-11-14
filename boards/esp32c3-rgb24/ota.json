@@ -8,6 +8,6 @@
   "flashBytes": 4194304,
   "appSlotBytes": 1966080,
   "url": "https://github.com/tbc0309/idotmatrix-bambulab/releases/download/1.0.2/esp32c3-rgb24.bin",
-  "size": 1696160,
-  "sha256": "8b13c8fdd651425d74f8e1d9c7af4f21b2912f47132adad5cb86c7fa1a47d9dd"
+  "size": 1700800,
+  "sha256": "6eed1cb5559b3d03eae60a7608146074a8183fca0229d705ac942dbe0fa2ccb7"
 }

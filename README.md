@@ -4,7 +4,7 @@
 
 让拓竹打印状态，亮在身边。一款运行于 ESP32 的独立像素屏控制器。
 
-使用受支持的 ESP32 开发板连接拓竹打印机，通过蓝牙驱动 iDotMatrix 32×32 像素屏。无需触摸屏或常开电脑，手机和电脑浏览器均可管理。
+使用受支持的 ESP32 开发板连接拓竹打印机，通过蓝牙驱动 iDotMatrix 32×32 像素屏，或使用 Clockwise 直驱 64×64 HUB75 灯板。无需触摸屏或常开电脑，手机和电脑浏览器均可管理。
 
 ## 像素屏动画
 
@@ -47,11 +47,11 @@
 | <img src="boards/seeed-xiao-esp32c6/board.png" width="140" alt="Seeed Studio XIAO ESP32C6"> | [Seeed Studio XIAO ESP32C6](https://wiki.seeedstudio.com/cn/xiao_esp32c6_getting_started/) | ESP32-C6 · 4 MB Flash · 512 KB SRAM | 支持 | ¥27.00 / ≈US$4.05 |
 | <img src="boards/esp32c3-oled-042/board.jpg" width="140" alt="ESP32-C3 0.42 OLED"> | [ESP32-C3 0.42 OLED](boards/esp32c3-oled-042/README.md) | ESP32-C3 · 4 MB Flash · 400 KB SRAM | 板载 OLED 状态显示，支持外接像素屏 | ¥14.80 / ≈US$2.22 |
 | <img src="boards/esp32c3-rgb24/board.png" width="140" alt="ESP32-C3 24 RGB Ring"> | [ESP32-C3 24 RGB Ring](boards/esp32c3-rgb24/README.md) | ESP32-C3 · 4 MB Flash · 400 KB SRAM | 24 灯环时钟与打印状态，支持外接像素屏 | ¥18.30 / ≈US$2.74 |
-| <img src="boards/clockwise-esp32-hub75/board.png" width="140" alt="Clockwise ESP32 + HUB75 64x64"> | [Clockwise ESP32 + HUB75 64x64](boards/clockwise-esp32-hub75/README.md) | ESP32 · 4 MB Flash · 520 KB SRAM | 直驱 64×64 HUB75 灯板，可选外接蓝牙像素屏 | — |
+| <img src="boards/clockwise-esp32-hub75/board.png" width="140" alt="Clockwise ESP32 + HUB75 64x64"> | [Clockwise ESP32 + HUB75 64x64](boards/clockwise-esp32-hub75/README.md) | ESP32 · 4 MB Flash · 520 KB SRAM | 直驱 64×64 HUB75 灯板 | — |
 
-Clockwise 的配网热点无需密码。灯板使用 5V 电源，通过 HUB75 排线连接。
+Clockwise 的后台标题为 **3D Print Pixel Monitor**。在「板载像素屏设置」可调整显示开关、亮度、每次 90° 旋转和打印视图。配网热点无需密码，灯板使用 5 V 电源并通过 HUB75 排线连接。
 
-搭配兼容 iDotMatrix 的 32×32 蓝牙像素屏与 2.4 GHz Wi-Fi。开发板和像素屏分别供电，无需连接信号线。主板图来源及许可见[第三方声明](THIRD-PARTY.md)。
+开发板使用 2.4 GHz Wi-Fi。采用蓝牙联动的机型可搭配兼容 iDotMatrix 的 32×32 像素屏，两台设备分别供电。主板图来源及许可见[第三方声明](THIRD-PARTY.md)。
 
 ## 外壳 3D 打印文件
 

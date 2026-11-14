@@ -2078,5 +2078,65 @@
     "Не удалось удалить рисунки",
     "作品の削除に失敗",
     "작품 삭제 실패"
+  ],
+  "On": [
+    "已开启",
+    "已開啟",
+    "On",
+    "Activé",
+    "Ein",
+    "Включён",
+    "オン",
+    "켜짐"
+  ],
+  "Off": [
+    "已关闭",
+    "已關閉",
+    "Off",
+    "Désactivé",
+    "Aus",
+    "Выключен",
+    "オフ",
+    "꺼짐"
+  ],
+  "Unavailable": [
+    "未就绪",
+    "未就緒",
+    "Unavailable",
+    "Indisponible",
+    "Nicht verfügbar",
+    "Недоступен",
+    "利用不可",
+    "사용 불가"
+  ],
+  "Onboard display settings": [
+    "板载像素屏设置",
+    "板載像素螢幕設定",
+    "Onboard display settings",
+    "Écran intégré",
+    "Integriertes Display",
+    "Встроенный дисплей",
+    "内蔵画面の設定",
+    "내장 화면 설정"
+  ],
+  "The onboard display uses network time.": [
+    "板载屏使用联网校时。",
+    "板載螢幕使用網路校時。",
+    "The onboard display uses network time.",
+    "L’écran intégré utilise l’heure du réseau.",
+    "Das integrierte Display nutzt die Netzwerkzeit.",
+    "Встроенный дисплей использует сетевое время.",
+    "内蔵画面はネットワーク時刻を使用します。",
+    "내장 화면은 네트워크 시간을 사용합니다."
+  ],
+  "Rotate 90°": [
+    "旋转 90°",
+    "旋轉 90°",
+    "Rotate 90°",
+    "Pivoter de 90°",
+    "90° drehen",
+    "Поворот на 90°",
+    "90°回転",
+    "90° 회전"
   ]
 }

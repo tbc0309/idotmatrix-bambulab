@@ -19,6 +19,7 @@ window.MatrixForms=(()=>{
  }
  function protect(inputId,policyId){
   const input=document.getElementById(inputId),policy=document.getElementById(policyId);
+  if(!input||!policy)return;
   protectedFields.set(input,{policy,saved:false,encrypted:true});
   const update=()=>{policy.disabled=!input.value.length;};input.addEventListener('input',update);update();
  }

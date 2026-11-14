@@ -56,8 +56,13 @@ bool configBegin(){
  nvs_close(h);if(!hasAdmin&&!adminChange("12345678",true))return false;
  mustChangePassword=!hasAdmin||(hasMarker?!changed:adminVerify("12345678"));
  if(!loaded){config.to<JsonObject>();config["schema"]=1;config["activePrinter"]=0;config["timezone"]="";config["timezoneName"]="";config["language"]="";config.createNestedArray("printers");config.createNestedArray("accounts");config.createNestedObject("wifi");auto pixel=config.createNestedObject("pixel");pixel["enabled"]=false;pixel["mac"]="";pixel["brightness"]=80;pixel["screenOn"]=true;pixel["rotate180"]=false;pixel["layout"]="printer";pixel["idleDisplay"]="clock";}
+#ifdef MATRIX_BOARD_HUB75
+ if(!config["pixel"]["rotation"].is<unsigned>())config["pixel"]["rotation"]=(config["pixel"]["rotate180"]|false)?180:0;
+ for(const char *key:{"enabled","mac","password","passwordEnc","passwordEncrypted","resetOnConnect","clearOnConnect","idleDisplay","rotate180"})config["pixel"].remove(key);
+#else
  if(!config["pixel"]["resetOnConnect"].is<bool>())config["pixel"]["resetOnConnect"]=false;
  if(!config["pixel"]["clearOnConnect"].is<bool>())config["pixel"]["clearOnConnect"]=false;
+#endif
  if(!config["onlineOTA"].is<bool>())config["onlineOTA"]=true;
  if(!config["language"].is<const char*>())config["language"]="";
  const char *zone=config["timezone"]|"";config["project"]="idotmatrix-bambulab";setenv("TZ",*zone?zone:"CST-8",1);tzset();return true;
@@ -66,11 +71,18 @@ std::string secret(JsonVariantConst obj,const char *key,const std::string &bindi
 void configCopy(DynamicJsonDocument &out){std::lock_guard<std::recursive_mutex> lock(guard);out.set(config);}
 void configBackup(JsonObject out){std::lock_guard<std::recursive_mutex> lock(guard);out.set(config.as<JsonObjectConst>());}
 void configPublic(JsonObject out){
- std::lock_guard<std::recursive_mutex> lock(guard);out.set(config.as<JsonObjectConst>());hideSecret(out["wifi"],"password");hideSecret(out["pixel"],"password");for(JsonObject p:out["printers"].as<JsonArray>())hideSecret(p,"accessCode");for(JsonObject a:out["accounts"].as<JsonArray>()){a["account"]=a["account"]|"";a["loginMethod"]=a["loginMethod"]|"token";a["loginCleared"]=a["loginCleared"]|false;hideSecret(a,"token");hideSecret(a,"password");cloudAccountHealth(a["id"]|"",a);}
+ std::lock_guard<std::recursive_mutex> lock(guard);out.set(config.as<JsonObjectConst>());hideSecret(out["wifi"],"password");
+#ifndef MATRIX_BOARD_HUB75
+ hideSecret(out["pixel"],"password");
+#endif
+ for(JsonObject p:out["printers"].as<JsonArray>())hideSecret(p,"accessCode");for(JsonObject a:out["accounts"].as<JsonArray>()){a["account"]=a["account"]|"";a["loginMethod"]=a["loginMethod"]|"token";a["loginCleared"]=a["loginCleared"]|false;hideSecret(a,"token");hideSecret(a,"password");cloudAccountHealth(a["id"]|"",a);}
 }
-bool configSave(JsonVariantConst input,std::string &error){
+static bool saveConfig(JsonVariantConst input,std::string &error,JsonObjectConst preferences){
  std::lock_guard<std::recursive_mutex> lock(guard);error="invalid_config";if(!input.is<JsonObjectConst>()||!input["printers"].is<JsonArrayConst>()||!input["accounts"].is<JsonArrayConst>()||!input["wifi"].is<JsonObjectConst>()||!input["pixel"].is<JsonObjectConst>()||input["printers"].size()>100||input["accounts"].size()>50)return error="invalid_config",false;
- DynamicJsonDocument next(configLimit);next["project"]="idotmatrix-bambulab";next["schema"]=1;next["activePrinter"]=input["activePrinter"]|0u;next["timezone"]=input["timezone"]|(config["timezone"]|"");next["timezoneName"]=input["timezoneName"]|(config["timezoneName"]|"");next["language"]=input["language"]|(config["language"]|"");
+ auto preference=[&](const char *key){return preferences[key]|(input[key]|(config[key]|""));};
+ DynamicJsonDocument next(configLimit);
+ if(!next.capacity())return error="config_too_large",false;
+ next["project"]="idotmatrix-bambulab";next["schema"]=1;next["activePrinter"]=input["activePrinter"]|0u;next["timezone"]=preference("timezone");next["timezoneName"]=preference("timezoneName");next["language"]=preference("language");
  if(input.containsKey("language")&&!input["language"].is<const char*>())return error="invalid_preferences",false;
  const char *language=next["language"]|"";bool supported=!*language;for(const char *known:{"zh","zh-TW","en","fr","de","ru","ja","ko"})if(!strcmp(language,known))supported=true;
  if(!supported)return error="invalid_preferences",false;
@@ -101,31 +113,42 @@ bool configSave(JsonVariantConst input,std::string &error){
  }
  auto w=next.createNestedObject("wifi");JsonVariantConst incomingWifi=input["wifi"];w["ssid"]=incomingWifi["ssid"]|"";JsonVariantConst previousWifi=config["wifi"];if(strcmp(w["ssid"]|"",previousWifi["ssid"]|""))previousWifi={};if(!field(w["ssid"],32)||!mergeSecret(w,incomingWifi,previousWifi,"password","wifi",63))return error="invalid_wifi",false;
  auto wifiPassword=secret(w,"password","wifi");if(!wifiPassword.empty()&&wifiPassword.size()<8)return error="invalid_wifi_password",false;
- auto p=next.createNestedObject("pixel");JsonVariantConst source=input["pixel"];p["enabled"]=source["enabled"]|false;p["mac"]=source["mac"]|"";p["brightness"]=source["brightness"]|80u;p["screenOn"]=source["screenOn"]|true;p["rotate180"]=source["rotate180"]|false;if(source.containsKey("layout")&&!source["layout"].is<const char*>())return error="invalid_pixel_options",false;p["layout"]=source["layout"]|"printer";p["idleDisplay"]=source["idleDisplay"]|"clock";if(source.containsKey("resetOnConnect")&&!source["resetOnConnect"].is<bool>())return error="invalid_pixel_options",false;p["resetOnConnect"]=source["resetOnConnect"]|(config["pixel"]["resetOnConnect"]|false);if(source.containsKey("clearOnConnect")&&!source["clearOnConnect"].is<bool>())return error="invalid_pixel_options",false;p["clearOnConnect"]=source["clearOnConnect"]|(config["pixel"]["clearOnConnect"]|false);
+ auto p=next.createNestedObject("pixel");JsonVariantConst source=input["pixel"];p["brightness"]=source["brightness"]|80u;p["screenOn"]=source["screenOn"]|true;if(source.containsKey("layout")&&!source["layout"].is<const char*>())return error="invalid_pixel_options",false;p["layout"]=source["layout"]|"printer";if(p["brightness"].as<unsigned>()<5||p["brightness"].as<unsigned>()>100||!pixel_screen::printLayoutValid(p["layout"]|""))return error="invalid_pixel_options",false;
+#ifdef MATRIX_BOARD_HUB75
+ const unsigned rotation=source["rotation"]|((source["rotate180"]|false)?180u:0u);
+ if(rotation>270||rotation%90)return error="invalid_pixel_options",false;
+ p["rotation"]=rotation;
+#else
+ p["rotate180"]=source["rotate180"]|false;
+ p["enabled"]=source["enabled"]|false;p["mac"]=source["mac"]|"";p["idleDisplay"]=source["idleDisplay"]|"clock";if(source.containsKey("resetOnConnect")&&!source["resetOnConnect"].is<bool>())return error="invalid_pixel_options",false;p["resetOnConnect"]=source["resetOnConnect"]|(config["pixel"]["resetOnConnect"]|false);if(source.containsKey("clearOnConnect")&&!source["clearOnConnect"].is<bool>())return error="invalid_pixel_options",false;p["clearOnConnect"]=source["clearOnConnect"]|(config["pixel"]["clearOnConnect"]|false);
  const char *mac=p["mac"];bool macOkay=strlen(mac)==17;for(size_t i=0;macOkay&&i<17;i++)macOkay=i%3==2?mac[i]==':':isxdigit((unsigned char)mac[i]);if((p["enabled"].as<bool>()&&!macOkay)||(*mac&&!macOkay))return error="invalid_pixel_mac",false;
  std::string canonical=mac;std::transform(canonical.begin(),canonical.end(),canonical.begin(),[](unsigned char c){return toupper(c);});p["mac"]=canonical;
- if(p["brightness"].as<unsigned>()<5||p["brightness"].as<unsigned>()>100||!pixel_screen::idleDisplayValid(p["idleDisplay"]|"")||!pixel_screen::printLayoutValid(p["layout"]|""))return error="invalid_pixel_options",false;
+ if(!pixel_screen::idleDisplayValid(p["idleDisplay"]|""))return error="invalid_pixel_options",false;
  const char *password=source["password"]|"";if(*password&&(strlen(password)!=6||strspn(password,"0123456789")!=6))return error="invalid_pixel_password",false;
  JsonVariantConst oldPixel=config["pixel"];if(strcmp(oldPixel["mac"]|"",canonical.c_str()))oldPixel={};
  if(!mergeSecret(p,source,oldPixel,"password",std::string("pixel:")+canonical,6))return error="invalid_pixel_password",false;
+#endif
  if(next.overflowed()){error="config_too_large";return error="config_too_large",false;}std::string encoded;serializeJson(next,encoded);if(encoded.size()>=196608)return error="config_too_large",false;
  nvs_handle_t h;if(nvs_open("matrix-bridge",NVS_READWRITE,&h)!=ESP_OK){error="storage_error";return error="storage_error",false;}bool okay=nvs_set_blob(h,"config",encoded.data(),encoded.size())==ESP_OK&&nvs_commit(h)==ESP_OK;nvs_close(h);if(!okay){error="storage_error";return error="storage_error",false;}
  deserializeJson(config,encoded);const char *zone=config["timezone"]|"";setenv("TZ",*zone?zone:"CST-8",1);tzset();++revision;error.clear();return true;
 }
+bool configSave(JsonVariantConst input,std::string &error){return saveConfig(input,error,{});}
 void preferencesPublic(JsonObject out){
  std::lock_guard<std::recursive_mutex> lock(guard);out["language"]=config["language"]|"";out["timezone"]=config["timezone"]|"";out["timezoneName"]=config["timezoneName"]|"";
 }
 bool preferencesSave(JsonVariantConst input,std::string &error){
  if(!input.is<JsonObjectConst>())return error="invalid_preferences",false;
- std::lock_guard<std::recursive_mutex> lock(guard);DynamicJsonDocument next(configLimit);next.set(config);
- bool initial=input["initialize"]|false;
- bool zoneEmpty=!strlen(config["timezone"]|"");
+ std::lock_guard<std::recursive_mutex> lock(guard);
+ StaticJsonDocument<JSON_OBJECT_SIZE(3)> changes;
+ const bool initial=input["initialize"]|false;
+ const bool zoneEmpty=!strlen(config["timezone"]|"");
  for(const char *key:{"language","timezone","timezoneName"})if(input.containsKey(key)){
   if(!input[key].is<const char*>())return error="invalid_preferences",false;
-  if(initial&&!strcmp(key,"timezoneName")){if(zoneEmpty)next[key]=input[key];continue;}
-  if(!initial||!strlen(config[key]|""))next[key]=input[key];
+  const bool unset=!strcmp(key,"language")?!strlen(config[key]|""):zoneEmpty;
+  if(!initial||unset)changes[key]=input[key].as<const char*>();
  }
- return configSave(next,error);
+ if(!changes.size()){error.clear();return true;}
+ return saveConfig(config,error,changes.as<JsonObjectConst>());
 }
 bool provisionWifi(JsonVariantConst input,std::string &error){
  if(!input.is<JsonObjectConst>()||!input["ssid"].is<const char*>()||!strlen(input["ssid"]|"")||!input["password"].is<const char*>())return error="invalid_wifi",false;
@@ -142,7 +165,10 @@ bool configReset(bool all){
 bool configRestore(JsonVariantConst input,std::string &error){
  error="invalid_backup";if(strcmp(input["project"]|"","idotmatrix-bambulab")||input["schema"]!=1)return false;DynamicJsonDocument plain(configLimit);plain.set(input);
  auto decode=[&](JsonObject node,const char *key,const std::string &binding){std::string enc=std::string(key)+"Enc";if(node[key].is<const char*>()&&node[std::string(key)+"Encrypted"]==false)return true;if(!node.containsKey(enc.c_str())){if(!strcmp(key,"password"))node["clearPassword"]=true;return !strcmp(key,"password");}String value;if(!xtouch_vault_open(node[enc.c_str()]|"",binding.c_str(),value))return false;node[key]=value;node.remove(enc.c_str());return true;};
- if(!decode(plain["wifi"],"password","wifi")||!decode(plain["pixel"],"password",std::string("pixel:")+(plain["pixel"]["mac"]|"")))return false;
+ if(!decode(plain["wifi"],"password","wifi"))return false;
+#ifndef MATRIX_BOARD_HUB75
+ if(!decode(plain["pixel"],"password",std::string("pixel:")+(plain["pixel"]["mac"]|"")))return false;
+#endif
  for(JsonObject a:plain["accounts"].as<JsonArray>()){if(!a["loginCleared"].as<bool>()&&!decode(a,"token",std::string("account:")+(a["id"]|"")))return false;if(!decode(a,"password",std::string(a["id"]|"")+":"+(a["region"]|"cn")+":"+(a["account"]|"")))return false;}
  for(JsonObject p:plain["printers"].as<JsonArray>())if(!strcmp(p["mode"]|"lan","lan")&&!decode(p,"accessCode",std::string("printer:")+(p["id"]|"")))return false;
  return configSave(plain.as<JsonVariantConst>(),error);

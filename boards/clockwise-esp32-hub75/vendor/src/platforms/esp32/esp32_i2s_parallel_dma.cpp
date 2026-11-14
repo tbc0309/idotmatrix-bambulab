@@ -31,6 +31,7 @@ Modified heavily for the ESP32 HUB75 DMA library by:
 #endif
 
 #include <driver/gpio.h>
+#include <esp_rom_sys.h>
 #if (ESP_IDF_VERSION_MAJOR >= 5)
 #include <esp_private/periph_ctrl.h>
 #else
@@ -205,7 +206,9 @@ Modified heavily for the ESP32 HUB75 DMA library by:
     // Data output GPIO setup
     int8_t* pins = _cfg.pin_data;  
 
-    for(int i = 0; i < bus_width; i++) 
+    // HUB75 OE is active low. Do not hand it to I2S until blank DMA data is running.
+    if (pins[7] >= 0) gpio_set_level((gpio_num_t)pins[7], 1);
+    for(int i = 0; i < bus_width; i++)
      _gpio_pin_init(pins[i]);
 
     // Route clock signal to clock pin
@@ -213,7 +216,7 @@ Modified heavily for the ESP32 HUB75 DMA library by:
   
     for (size_t i = 0; i < bus_width; i++) {
 
-      if (pins[i] >= 0) {
+      if (pins[i] >= 0 && i != 7) {
         esp_rom_gpio_connect_out_signal(pins[i], iomux_signal_base + i, false, false);
       }
     }
@@ -578,6 +581,15 @@ Modified heavily for the ESP32 HUB75 DMA library by:
     dev->out_link.start = 1;
     
     dev->conf.tx_start  = 1;
+    if (_cfg.pin_data[7] >= 0) {
+      esp_rom_delay_us(100);
+      const bool wide = _cfg.parallel_width == 16 || (ESP32_I2S_DEVICE == 0 && _cfg.parallel_width == 8);
+      const int signal = (ESP32_I2S_DEVICE == 0)
+          ? (wide ? I2S0O_DATA_OUT8_IDX : I2S0O_DATA_OUT0_IDX)
+          : (wide ? I2S1O_DATA_OUT8_IDX : I2S1O_DATA_OUT0_IDX);
+      esp_rom_gpio_connect_out_signal(_cfg.pin_data[7], signal + 7, false, false);
+    }
+
 
    
   } // end 

@@ -1,7 +1,10 @@
 #include "app.h"
 #include "timezone.h"
+#include "ported/features/pixel_screen/display_policy.h"
+#ifndef MATRIX_BOARD_HUB75
 #include "ported/platform/idf/ble_runtime.h"
 #include "ported/features/pixel_screen/connection.h"
+#endif
 #include "ported/features/pixel_screen/activity.h"
 #include "ported/xtouch/vault.h"
 #include <esp_ota_ops.h>
@@ -9,6 +12,7 @@
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <esp_mac.h>
+#include <esp_system.h>
 #include "board.h"
 #include <ctime>
 
@@ -21,13 +25,19 @@ std::atomic<int> lastRssi{-127};
 namespace { pixel_screen::SourceGate sourceGate;std::atomic<uint32_t> stateAt{0};pixel_screen::State prior=pixel_screen::State::Offline;pixel_screen::Activity priorActivity=pixel_screen::Activity::None;uint32_t displaySource=0;uint32_t lastPixelRevision=UINT32_MAX; }
 void pixelApply(){
  std::lock_guard<std::recursive_mutex> lock(guard);
- JsonObjectConst p=config["pixel"].as<JsonObjectConst>();pixel_screen::ConnectionConfig c;
+ JsonObjectConst p=config["pixel"].as<JsonObjectConst>();
+#ifdef MATRIX_BOARD_HUB75
+ board::configureDisplay(p["screenOn"]|true,p["brightness"]|80u,p["rotation"]|0u);
+#else
+ pixel_screen::ConnectionConfig c;
  c.enabled=p["enabled"]|false;snprintf(c.mac,sizeof(c.mac),"%s",p["mac"]|"");
  auto pass=secret(p,"password",std::string("pixel:")+c.mac);c.passwordUnavailable=p.containsKey("passwordEnc")&&pass.empty();
  snprintf(c.password,sizeof(c.password),"%s",pass.c_str());c.brightness=p["brightness"]|80u;c.screenOn=p["screenOn"]|true;c.rotate180=p["rotate180"]|false;
  c.resetOnConnect=p["resetOnConnect"]|false;c.clearOnConnect=p["clearOnConnect"]|false;
  c.idleDisplay=pixel_screen::idleDisplayFromName(p["idleDisplay"]|"clock");
- pixel_screen::connectionConfigure(c);std::fill(pass.begin(),pass.end(),0);memset(c.password,0,sizeof(c.password));lastPixelRevision=revision.load();
+ pixel_screen::connectionConfigure(c);std::fill(pass.begin(),pass.end(),0);memset(c.password,0,sizeof(c.password));
+#endif
+ lastPixelRevision=revision.load();
 }
 void pixelPoll(){
  if(lastPixelRevision!=revision.load())pixelApply();
@@ -44,24 +54,42 @@ void pixelPoll(){
  }
  if(epoch>1577836800&&localtime_r(&epoch,&local)){
   strftime(s.clock,sizeof(s.clock),"%H:%M",&local);
+#ifndef MATRIX_BOARD_HUB75
   static std::string previousOffset;char offset[12]{};strftime(offset,sizeof(offset),"%z",&local);
   if(!previousOffset.empty()&&previousOffset!=offset)pixel_screen::connectionTimeChanged();
   previousOffset=offset;
+#endif
  }
+#ifndef MATRIX_BOARD_HUB75
  pixel_screen::connectionSnapshot(s);xtouch_ble::poll();
+#endif
 #if defined(MATRIX_BOARD_OLED) || defined(MATRIX_BOARD_RGB_RING) || defined(MATRIX_BOARD_HUB75)
  board::displaySnapshot(s, wifiOnline, ipv4().c_str(), now);
 #endif
 }
 void pixelStatus(JsonObject out){
  time_t epoch=time(nullptr);tm local{};char clock[6]="--:--";if(epoch>1577836800&&localtime_r(&epoch,&local))strftime(clock,sizeof(clock),"%H:%M",&local);out["clock"]=clock;
- auto s=telemetrySnapshot();pixel_screen::IdleDisplay idle;{std::lock_guard<std::recursive_mutex> lock(guard);idle=pixel_screen::idleDisplayFromName(config["pixel"]["idleDisplay"]|"clock");}auto visible=s;if(!printerOnline)visible.state=pixel_screen::State::Offline;auto plan=pixel_screen::displayPlan(visible,idle,uint32_t(esp_timer_get_time()/1000)-stateAt.load());pixel_screen::connectionStatus(out);out["displayState"]=int(plan.picture.state);out["state"]=int(s.state);out["percent"]=s.percent;out["stage"]=s.stage;out["amsMain"]=s.amsMain;out["stateAgeMs"]=uint32_t(esp_timer_get_time()/1000)-stateAt.load();out["headParked"]=s.headParked;out["chamberHeating"]=s.chamberHeating;out["model"]=s.model;out["currentLayer"]=s.currentLayer;out["totalLayers"]=s.totalLayers;out["filamentKnown"]=s.filamentKnown;out["filamentColor"]=s.filamentColor;out["feedColor"]=s.feedColor;out["leftMinutes"]=s.leftMinutes;out["nozzle"]=s.nozzle;out["bed"]=s.bed;bool environment=pixel_screen::environmentAvailable(s);out["environmentAvailable"]=environment;if(environment){out["temperature"]=s.temperature;out["humidity"]=s.humidity;}else{out["temperature"]=nullptr;out["humidity"]=nullptr;}
+ auto s=telemetrySnapshot();pixel_screen::IdleDisplay idle;{std::lock_guard<std::recursive_mutex> lock(guard);idle=pixel_screen::idleDisplayFromName(config["pixel"]["idleDisplay"]|"clock");}auto visible=s;if(!printerOnline)visible.state=pixel_screen::State::Offline;auto plan=pixel_screen::displayPlan(visible,idle,uint32_t(esp_timer_get_time()/1000)-stateAt.load());
+#ifdef MATRIX_BOARD_HUB75
+ board::displayStatus(out);
+#else
+ pixel_screen::connectionStatus(out);
+#endif
+ out["displayState"]=int(plan.picture.state);out["state"]=int(s.state);out["percent"]=s.percent;out["stage"]=s.stage;out["amsMain"]=s.amsMain;out["stateAgeMs"]=uint32_t(esp_timer_get_time()/1000)-stateAt.load();out["headParked"]=s.headParked;out["chamberHeating"]=s.chamberHeating;out["model"]=s.model;out["currentLayer"]=s.currentLayer;out["totalLayers"]=s.totalLayers;out["filamentKnown"]=s.filamentKnown;out["filamentColor"]=s.filamentColor;out["feedColor"]=s.feedColor;out["leftMinutes"]=s.leftMinutes;out["nozzle"]=s.nozzle;out["bed"]=s.bed;bool environment=pixel_screen::environmentAvailable(s);out["environmentAvailable"]=environment;if(environment){out["temperature"]=s.temperature;out["humidity"]=s.humidity;}else{out["temperature"]=nullptr;out["humidity"]=nullptr;}
 }
 }
 extern "C" void app_main(){
+#ifdef MATRIX_BOARD_HUB75
+ bridge::board::prepareDisplay();
+#endif
+ ESP_LOGI("bridge","Reset reason %d",int(esp_reset_reason()));
  ESP_LOGI("bridge","idotmatrix-bambulab %s | %s",esp_app_get_description()->version,bridge::board::name);
  if(!bridge::configBegin()){ESP_LOGE("bridge","Configuration initialization failed");return;}
- bridge::networkBegin(); ESP_LOGI("bridge","Network initialized"); bridge::cloudBegin(); pixel_screen::connectionBegin(); ESP_LOGI("bridge","Pixel worker initialized"); bridge::pixelApply(); ESP_LOGI("bridge","Pixel configuration applied"); bridge::printerBegin(); bridge::webBegin(); bridge::serialBegin(); ESP_LOGI("bridge","Services ready");
+ bridge::networkBegin(); ESP_LOGI("bridge","Network initialized"); bridge::cloudBegin();
+#ifndef MATRIX_BOARD_HUB75
+ pixel_screen::connectionBegin(); ESP_LOGI("bridge","Pixel worker initialized");
+#endif
+  bridge::pixelApply(); ESP_LOGI("bridge","Pixel configuration applied"); bridge::printerBegin(); bridge::webBegin(); bridge::serialBegin(); ESP_LOGI("bridge","Services ready");
  bridge::board::begin();bridge::bootButtonBegin();
  uint32_t at=0;bool valid=false;
  for(;;){bridge::networkPoll();bridge::cloudSessionsPoll();bridge::printerPoll();bridge::pixelPoll();bridge::updatePoll();uint32_t now=uint32_t(esp_timer_get_time()/1000);

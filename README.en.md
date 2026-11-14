@@ -4,7 +4,7 @@
 
 Keep your Bambu Lab print status in sight. An independent pixel-display controller for ESP32 boards.
 
-A supported ESP32 board connects your Bambu Lab printer to an iDotMatrix 32×32 Bluetooth pixel display. Manage it from a phone or desktop browser, without a touchscreen or an always-on computer.
+A supported ESP32 board connects your Bambu Lab printer to an iDotMatrix 32×32 Bluetooth display or drives a wired 64×64 HUB75 panel on Clockwise. Manage it from a phone or desktop browser, without a touchscreen or an always-on computer.
 
 ## Pixel animations
 
@@ -48,11 +48,11 @@ The ESP32-C3 OLED shows status and print progress in large text. While idle, it 
 | <img src="boards/seeed-xiao-esp32c6/board.png" width="140" alt="Seeed Studio XIAO ESP32C6"> | [Seeed Studio XIAO ESP32C6](https://wiki.seeedstudio.com/xiao_esp32c6_getting_started/) | ESP32-C6 · 4 MB Flash · 512 KB SRAM | Supported | ¥27.00 / ≈US$4.05 |
 | <img src="boards/esp32c3-oled-042/board.jpg" width="140" alt="ESP32-C3 0.42 OLED"> | [ESP32-C3 0.42 OLED](boards/esp32c3-oled-042/README.md) | ESP32-C3 · 4 MB Flash · 400 KB SRAM | Onboard OLED status and external pixel display | ¥14.80 / ≈US$2.22 |
 | <img src="boards/esp32c3-rgb24/board.png" width="140" alt="ESP32-C3 24 RGB Ring"> | [ESP32-C3 24 RGB Ring](boards/esp32c3-rgb24/README.md) | ESP32-C3 · 4 MB Flash · 400 KB SRAM | Onboard clock and print status; optional external pixel display | ¥18.30 / ≈US$2.74 |
-| <img src="boards/clockwise-esp32-hub75/board.png" width="140" alt="Clockwise ESP32 + HUB75 64x64"> | [Clockwise ESP32 + HUB75 64x64](boards/clockwise-esp32-hub75/README.md) | ESP32 · 4 MB Flash · 520 KB SRAM | Direct 64×64 HUB75 display, optional external Bluetooth display | — |
+| <img src="boards/clockwise-esp32-hub75/board.png" width="140" alt="Clockwise ESP32 + HUB75 64x64"> | [Clockwise ESP32 + HUB75 64x64](boards/clockwise-esp32-hub75/README.md) | ESP32 · 4 MB Flash · 520 KB SRAM | Direct 64×64 HUB75 display | — |
 
-Clockwise uses an open provisioning hotspot and requires a 5 V panel supply.
+Clockwise runs **3D Print Pixel Monitor**. Onboard display settings cover power, brightness, rotation in 90° steps and print view. It uses an open provisioning hotspot and requires a 5 V panel supply and a HUB75 ribbon cable.
 
-Use a compatible iDotMatrix 32×32 Bluetooth display and 2.4 GHz Wi-Fi. Power the board and display separately; no signal wiring is required between them. See [third-party notices](THIRD-PARTY.md) for the board image source and license.
+Use 2.4 GHz Wi-Fi. Boards with Bluetooth display support pair with a compatible 32×32 iDotMatrix display. Power the board and Bluetooth display separately. See [third-party notices](THIRD-PARTY.md) for the board image source and license.
 
 ## 3D-printable enclosure
 

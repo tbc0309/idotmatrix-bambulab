@@ -30,45 +30,74 @@ uint32_t tick(){return uint32_t(esp_timer_get_time()/1000);}
 bool enabled(){std::lock_guard<std::recursive_mutex> lock(guard);return config["onlineOTA"]|true;}
 struct HttpDelete{void operator()(esp_http_client *client)const{
     void *context=nullptr;esp_http_client_get_user_data(client,&context);
-    esp_http_client_close(client);esp_http_client_cleanup(client);delete static_cast<std::string*>(context);
+    esp_http_client_close(client);esp_http_client_cleanup(client);delete[] static_cast<char*>(context);
 }};
 using Http=std::unique_ptr<esp_http_client,HttpDelete>;
 Http open(const std::string &initial,int &status){
     std::string url=initial;
     for(unsigned redirects=0;redirects<5;++redirects){
         if(!enabled())return {};
-        auto context=std::unique_ptr<std::string>(new(std::nothrow) std::string);if(!context)return {};
+        auto context=std::unique_ptr<char[]>(new(std::nothrow) char[4097]{});if(!context)return {};
         esp_http_client_config_t options{};options.url=url.c_str();options.crt_bundle_attach=esp_crt_bundle_attach;
         options.timeout_ms=15000;options.buffer_size=4096;options.buffer_size_tx=1024;options.disable_auto_redirect=true;options.user_data=context.get();
         options.event_handler=[](esp_http_client_event_t *event)->esp_err_t{
             if(event->event_id==HTTP_EVENT_ON_HEADER&&event->header_key&&event->header_value&&!strcasecmp(event->header_key,"Location")&&strlen(event->header_value)<=4096)
-                *static_cast<std::string*>(event->user_data)=event->header_value;
+                memcpy(event->user_data,event->header_value,strlen(event->header_value)+1);
             return ESP_OK;
         };
         Http client(esp_http_client_init(&options));if(!client)return {};
-        std::string *location=context.release();
+        const char *location=context.release();
         esp_http_client_set_header(client.get(),"User-Agent","idotmatrix-bambulab");
         esp_http_client_set_header(client.get(),"Accept","application/vnd.github+json");
         if(esp_http_client_open(client.get(),0)!=ESP_OK)return {};
         esp_http_client_fetch_headers(client.get());status=esp_http_client_get_status_code(client.get());
         if(status!=301&&status!=302&&status!=303&&status!=307&&status!=308)return client;
-        if(!update_policy::redirect(*location))return {};
-        url=*location;
+        if(!update_policy::redirect(location))return {};
+        url=location;
     }
     return {};
 }
-bool getJson(const std::string &url,DynamicJsonDocument &doc,size_t limit,int &status){
-    auto client=open(url,status);if(!client||status!=200)return false;
-    auto buffer=std::unique_ptr<char[]>(new(std::nothrow) char[4096]);if(!buffer)return false;
-    std::string body;
-    for(;;){
-        if(!enabled())return false;
-        int count=esp_http_client_read(client.get(),buffer.get(),4096);
-        if(count<0)return false;if(!count)break;
-        if(size_t(count)>limit-body.size())return false;
-        body.append(buffer.get(),count);
+class JsonReader {
+public:
+    JsonReader(esp_http_client_handle_t client, size_t limit) : client_(client), remaining_(limit) {}
+    int read() {
+        if (position_ == length_) {
+            if (!remaining_ || !enabled()) return -1;
+            const int count = esp_http_client_read(client_, buffer_, std::min(remaining_, sizeof(buffer_)));
+            if (count <= 0) { failed_ = count < 0; return -1; }
+            remaining_ -= count;
+            position_ = 0;
+            length_ = count;
+        }
+        return static_cast<unsigned char>(buffer_[position_++]);
     }
-    return esp_http_client_is_complete_data_received(client.get())&&!deserializeJson(doc,body.c_str());
+    size_t readBytes(char *dest, size_t size) {
+        size_t copied = 0;
+        for (; copied < size; ++copied) {
+            const int c = read();
+            if (c < 0) break;
+            dest[copied] = static_cast<char>(c);
+        }
+        return copied;
+    }
+    bool complete() {
+        while (read() >= 0) {}
+        return !failed_ && esp_http_client_is_complete_data_received(client_);
+    }
+private:
+    esp_http_client_handle_t client_;
+    size_t remaining_;
+    size_t position_ = 0, length_ = 0;
+    bool failed_ = false;
+    char buffer_[512];
+};
+bool getJson(const std::string &url,DynamicJsonDocument &doc,size_t limit,int &status,JsonVariantConst filter={}){
+    if(!doc.capacity())return false;
+    auto client=open(url,status);if(!client||status!=200)return false;
+    JsonReader reader(client.get(),limit);
+    const auto result=filter.isNull()?deserializeJson(doc,reader):
+        deserializeJson(doc,reader,DeserializationOption::Filter(filter));
+    return !result && reader.complete();
 }
 bool asset(JsonArrayConst assets,const std::string &filename,const std::string &url,JsonVariantConst &found){
     unsigned count=0;
@@ -76,8 +105,11 @@ bool asset(JsonArrayConst assets,const std::string &filename,const std::string &
     return count==1&&url==(found["browser_download_url"]|"");
 }
 bool checkRelease(Candidate &out,std::string &phase,std::string &error){
-    DynamicJsonDocument release(board::psramBytes ? 65536 : 16384);int status=0;
-    if(!getJson(releaseApi,release,65536,status)){
+    DynamicJsonDocument release(8192);int status=0;
+    StaticJsonDocument<512> filter;
+    for(const char *key:{"tag_name","draft","prerelease"})filter[key]=true;
+    for(const char *key:{"name","browser_download_url","size","digest"})filter["assets"][0][key]=true;
+    if(!getJson(releaseApi,release,65536,status,filter.as<JsonVariantConst>())){
         if(status==404){phase="unpublished";return true;}
         error=status==403||status==429?"update_rate_limited":"update_connection_failed";return false;
     }
@@ -92,7 +124,7 @@ bool checkRelease(Candidate &out,std::string &phase,std::string &error){
     size_t assetSize=imageAsset["size"]|0u;std::string digest=imageAsset["digest"]|"";
     if(!assetSize||assetSize>board::flashBytes){error="invalid_release";return false;}
     release.clear();release.shrinkToFit();
-    DynamicJsonDocument manifest(16384);status=0;
+    DynamicJsonDocument manifest(2048);status=0;
     std::string metadata="https://raw.githubusercontent.com/tbc0309/idotmatrix-bambulab/"+version+"/boards/"+board::id+"/ota.json";
     if(!getJson(metadata,manifest,16384,status)){error="update_connection_failed";return false;}
     auto *slot=esp_ota_get_next_update_partition(nullptr);
@@ -152,12 +184,11 @@ void worker(void *argument){
     vTaskDelete(nullptr);
 }
 bool updateMemoryAvailable(){
-#ifdef CONFIG_IDF_TARGET_ESP32C3
-    constexpr uint32_t caps=MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT;
-    return heap_caps_get_free_size(caps)>=72*1024 && heap_caps_get_largest_free_block(caps)>=32*1024;
-#else
+    if constexpr (!memory::externalRam) {
+        constexpr uint32_t caps=MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT;
+        return heap_caps_get_free_size(caps)>=64*1024 && heap_caps_get_largest_free_block(caps)>=28*1024;
+    }
     return true;
-#endif
 }
 bool start(bool installing){
     if(!updateMemoryAvailable())return false;
