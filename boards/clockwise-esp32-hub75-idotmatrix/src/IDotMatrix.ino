@@ -9475,7 +9475,7 @@ void setup(){
 #if defined(IDOTMATRIX_BOARD_CLOCKWISE)
 static void updateClockwiseBootButton(uint32_t now) {
   constexpr uint32_t debounceMs = 35;
-  constexpr uint32_t resetPinHoldMs = 5000;
+  constexpr uint32_t shortPressLimitMs = 1000;
   constexpr uint32_t factoryResetHoldMs = 10000;
   static bool rawPressed = false;
   static bool pressed = false;
@@ -9510,15 +9510,7 @@ static void updateClockwiseBootButton(uint32_t now) {
     }
     return;
   }
-  if (heldMs >= resetPinHoldMs) {
-    if (displayPin == noDisplayPin || saveDisplayPin(noDisplayPin)) {
-      displayPinVerified = false;
-      Serial.println("BOOT: Bluetooth PIN cleared");
-    } else {
-      Serial.println("BOOT: could not clear Bluetooth PIN");
-    }
-    return;
-  }
+  if (heldMs >= shortPressLimitMs) return;
   if (bulk.active || carouselUploadOpen) return;
   const int8_t next = nextCarouselSlot(carouselActiveSlot);
   if (next >= 0 && startCarouselSlot(static_cast<uint8_t>(next))) {
