@@ -2323,7 +2323,7 @@ void sendCommandAck(uint8_t cmd, uint8_t sub) { sendCommandStatus(cmd, sub, 0x01
 void sendTransferAck(uint8_t type, uint8_t status) { sendCommandStatus(type, 0x00, status); }
 
 #if defined(IDOTMATRIX_BOARD_CLOCKWISE)
-// Report the 64x64 protocol compatibility version expected by the app.
+// Report the reference 64x64 MCU version for iOS compatibility.
 constexpr uint8_t deviceInfo[] = {0x09,0x00,0x01,0x80,5,11,0x01,IDOTMATRIX_SCREEN_TYPE,0x00};
 #else
 constexpr uint8_t deviceInfo[] = {0x09,0x00,0x01,0x80,FW_RELEASE_MAJOR,FW_RELEASE_MINOR,0x01,IDOTMATRIX_SCREEN_TYPE,0x00};
@@ -9305,6 +9305,9 @@ void setup(){
     idotMemoryTelemetrySnapshot("setup.after_hub75");
   }
 #endif
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  pinMode(0, INPUT_PULLUP);
+#endif
   loadDisplayPin();
   loadBrightnessFromNVS();
   loadClockPreferencesFromNVS();
@@ -9469,6 +9472,63 @@ void setup(){
 // ======================================================
 // LOOP
 // ======================================================
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+static void updateClockwiseBootButton(uint32_t now) {
+  constexpr uint32_t debounceMs = 35;
+  constexpr uint32_t resetPinHoldMs = 5000;
+  constexpr uint32_t factoryResetHoldMs = 10000;
+  static bool rawPressed = false;
+  static bool pressed = false;
+  static bool seenRelease = false;
+  static uint32_t changedAt = 0;
+  static uint32_t pressedAt = 0;
+
+  const bool down = digitalRead(0) == LOW;
+  if (rawPressed != down) {
+    rawPressed = down;
+    changedAt = now;
+  }
+  if (now - changedAt < debounceMs) return;
+  if (!seenRelease) {
+    seenRelease = !down;
+    return;
+  }
+  if (pressed == down) return;
+
+  pressed = down;
+  if (pressed) {
+    pressedAt = changedAt;
+    return;
+  }
+  const uint32_t heldMs = changedAt - pressedAt;
+  if (heldMs >= factoryResetHoldMs) {
+    resetRuntimeState();
+    if (displayPin == noDisplayPin) {
+      Serial.println("BOOT: factory reset complete");
+      Serial.flush();
+      ESP.restart();
+    }
+    return;
+  }
+  if (heldMs >= resetPinHoldMs) {
+    if (displayPin == noDisplayPin || saveDisplayPin(noDisplayPin)) {
+      displayPinVerified = false;
+      Serial.println("BOOT: Bluetooth PIN cleared");
+    } else {
+      Serial.println("BOOT: could not clear Bluetooth PIN");
+    }
+    return;
+  }
+  if (bulk.active || carouselUploadOpen) return;
+  const int8_t next = nextCarouselSlot(carouselActiveSlot);
+  if (next >= 0 && startCarouselSlot(static_cast<uint8_t>(next))) {
+    Serial.printf("BOOT: playing stored slot %d\n", next);
+  } else {
+    Serial.println("BOOT: no playable stored slot");
+  }
+}
+#endif
+
 void loop(){
 #if IDOTMATRIX_OTA_AVAILABLE
   // OTA HTTP handling must remain outside the runtime-state mutex. Firmware
@@ -9487,6 +9547,9 @@ void loop(){
   // timeout or playback work. This keeps LittleFS remove/rename/NVS activity
   // off nimble_host and preserves ACK pacing for the next bulk transfer.
   processDeferredAssetCommit();
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  updateClockwiseBootButton(millis());
+#endif
   // 06/02 may publish a complete Preset candidate bank and start its
   // first decoder. Keep that work on loopTask as well, then perform any
   // disconnect/bulk-abort cleanup only after pending publication has settled.
