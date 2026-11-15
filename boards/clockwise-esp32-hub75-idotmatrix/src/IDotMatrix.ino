@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <new>
 #include <Arduino.h>
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
@@ -10,6 +11,9 @@
 #include "IDotMatrixAudioOutput.h"
 #include "IDotMatrixOta.h"
 #include "IDotMatrixMemoryTelemetry.h"
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  #include "ClockwiseWifiClock.h"
+#endif
 #if IDOTMATRIX_BUZZER_TYPE == IDOTMATRIX_BUZZER_PASSIVE
   #include <esp32-hal-ledc.h>
 #endif
@@ -475,6 +479,9 @@ uint8_t brightnessPercent = 100;
 // CLOCK / DATE
 // ======================================================
 bool clockSynced = false;
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+static bool wifiClockSynced = false;
+#endif
 uint16_t syncYear = 2026;
 uint8_t syncMonth = 1, syncDay = 1;
 uint8_t syncHour = 0, syncMinute = 0, syncSecond = 0;
@@ -484,7 +491,11 @@ static inline uint64_t monotonicMillis64() {
   return (uint64_t)(esp_timer_get_time() / 1000LL);
 }
 uint8_t clockStyle = 0;
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+bool clock24h = true;
+#else
 bool clock24h = false;
+#endif
 bool clockShowDate = false;
 CRGB defaultClockColor(uint8_t style) {
 #if defined(IDOTMATRIX_BOARD_CLOCKWISE)
@@ -622,7 +633,11 @@ struct TextState {
   uint8_t backgroundMode = 0;
   uint8_t backgroundR = 0, backgroundG = 0, backgroundB = 0;
   uint8_t meta[MAX_TEXT_GLYPHS][TEXT_GLYPH_META];
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  uint8_t *bitmap = nullptr;
+#else
   uint8_t bitmap[MAX_TEXT_GLYPHS * TEXT_MAX_BITMAP_BYTES];
+#endif
   uint16_t bitmapOffset[MAX_TEXT_GLYPHS];
   uint8_t bitmapWidth[MAX_TEXT_GLYPHS];
   uint8_t glyphWidth = 8;
@@ -690,6 +705,9 @@ extern uint8_t scheduleGlobalFlags;
 extern int8_t scheduleActiveIndex;
 extern int8_t scheduleFailedIndex;
 extern CRGB *scheduleSavedFrame;
+static bool isSavedFrameMode(DisplayMode mode);
+static bool restoreEventBackground(DisplayMode mode);
+static void saveEventBackground(DisplayMode mode, bool previousCarousel);
 uint32_t crc32Update(uint32_t crc, const uint8_t *data, size_t len);
 bool fileMatchesMedia(const String &path, uint32_t expectedSize, uint32_t expectedCRC);
 void clearFramebuffer(const CRGB &color = CRGB::Black);
@@ -1171,6 +1189,49 @@ void cancelConnectionBuzzer() {}
 void updateBuzzer() {}
 #endif
 
+static bool isSavedFrameMode(DisplayMode mode) {
+  return mode == DISPLAY_SOLID || mode == DISPLAY_RAW || mode == DISPLAY_GRAFFITI;
+}
+
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+static CRGB savedEventColor;
+static bool savedEventColorValid = false;
+#endif
+
+static void saveEventBackground(DisplayMode mode, bool previousCarousel) {
+  if (!isSavedFrameMode(mode) || previousCarousel) return;
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  if (mode == DISPLAY_SOLID) {
+    savedEventColor = framebuffer[0];
+    savedEventColorValid = true;
+    return;
+  }
+  if (!scheduleSavedFrame) scheduleSavedFrame = static_cast<CRGB *>(malloc(LOGICAL_FRAME_BYTES));
+#endif
+  if (scheduleSavedFrame) memcpy(scheduleSavedFrame, framebuffer, LOGICAL_FRAME_BYTES);
+}
+
+static bool restoreEventBackground(DisplayMode mode) {
+  if (!isSavedFrameMode(mode)) return false;
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  if (mode == DISPLAY_SOLID && savedEventColorValid) {
+    fill_solid(framebuffer, NUM_LEDS, savedEventColor);
+    return true;
+  }
+#endif
+  if (!scheduleSavedFrame) return false;
+  memcpy(framebuffer, scheduleSavedFrame, LOGICAL_FRAME_BYTES);
+  return true;
+}
+
+static void releaseEventBackground() {
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  savedEventColorValid = false;
+  free(scheduleSavedFrame);
+  scheduleSavedFrame = nullptr;
+#endif
+}
+
 void startAlarm(uint8_t slot){
   if(slot>=ALARM_SLOT_COUNT || alarmActive) return;
   AlarmSlot &a=alarms[slot];
@@ -1183,7 +1244,7 @@ void startAlarm(uint8_t slot){
   alarmPreviousMode=displayMode;
   alarmPreviousCarousel=carouselActive || gifCarouselPlaybackFileActive;
   alarmPreviousCarouselSlot=carouselActiveSlot;
-  if(scheduleSavedFrame) ::memcpy(scheduleSavedFrame, framebuffer, LOGICAL_FRAME_BYTES);
+  saveEventBackground(alarmPreviousMode, alarmPreviousCarousel);
   alarmActive=true; activeAlarmSlot=slot; alarmEndsAt=millis()+(uint32_t)a.durationSec*1000UL;
   loadAlarmMedia(slot);
 #if DEBUG_SERIAL
@@ -1201,15 +1262,13 @@ void stopAlarm(){
     int8_t slot=alarmPreviousCarouselSlot;
     if(slot<0 || slot>=CAROUSEL_SLOT_COUNT) slot=nextCarouselSlot(-1);
     alarmPreviousCarousel=false; alarmPreviousCarouselSlot=-1;
-    if(slot>=0){ startCarouselSlot((uint8_t)slot); return; }
+    if(slot>=0){ releaseEventBackground(); startCarouselSlot((uint8_t)slot); return; }
   }
   alarmPreviousCarousel=false; alarmPreviousCarouselSlot=-1;
 
   // Restore framebuffer-backed modes exactly. Other dynamic modes cannot be
   // reconstructed generically, so fall back to the synchronized clock/blank.
-  if(scheduleSavedFrame && (alarmPreviousMode==DISPLAY_SOLID || alarmPreviousMode==DISPLAY_RAW ||
-      alarmPreviousMode==DISPLAY_GRAFFITI)) {
-    ::memcpy(framebuffer, scheduleSavedFrame, LOGICAL_FRAME_BYTES);
+  if (restoreEventBackground(alarmPreviousMode)) {
     displayMode=alarmPreviousMode;
     refreshMatrix();
   } else if(hasValidTimeSource()) {
@@ -1217,6 +1276,7 @@ void stopAlarm(){
   } else {
     switchDisplayMode(DISPLAY_NONE); clearFramebuffer(); refreshMatrix();
   }
+  releaseEventBackground();
 }
 
 void updateAlarms(){
@@ -1663,11 +1723,28 @@ DeferredPresetActivationState deferredPresetActivation;
 // ======================================================
 // PACKET / BULK
 // ======================================================
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+static uint8_t inlinePacketBuffer[520];
+static uint8_t *packetBuffer = inlinePacketBuffer;
+static inline uint32_t rd32le(const uint8_t *p);
+static uint8_t *deferredGifPacket = nullptr;
+static size_t deferredGifPacketSize = 0;
+#else
 uint8_t packetBuffer[MAX_PACKET_SIZE];
+#endif
 size_t packetReceived = 0;
 size_t packetExpected = 0;
 uint32_t packetLastRxMs = 0;
 uint32_t bulkLastRxMs = 0;
+
+static void resetNormalPacket() {
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  if (packetBuffer != inlinePacketBuffer) free(packetBuffer);
+  packetBuffer = inlinePacketBuffer;
+#endif
+  packetReceived = packetExpected = 0;
+  packetLastRxMs = 0;
+}
 
 // Audio/Rhythm FA02 is a byte stream, not a normal LE16-length packet stream.
 // LEVEL frames are exactly 6 bytes. FFT frames are exactly 21 bytes and carry
@@ -1730,7 +1807,11 @@ struct DeferredAssetCommitState {
   uint32_t queuedAt = 0;
 } deferredAssetCommit;
 
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+uint8_t *textPayload = nullptr;
+#else
 uint8_t textPayload[MAX_TEXT_PAYLOAD];
+#endif
 size_t textPayloadReceived = 0;
 
 // Local TEXT viewport state. The app already sends the complete glyph stream;
@@ -3512,6 +3593,7 @@ bool parseTextPayloadInternal(const uint8_t *data,size_t len,bool carouselContex
     {0,0}, {0,0}, {8,16}, {16,16}, {0,0}, {16,32},
     {32,32}, {32,64}, {64,64},
   };
+  size_t bitmapBytes = 0;
   auto decodeRecords = [&](GlyphRecord uniform, bool store) {
     size_t input=TEXT_GLOBAL_HEADER, output=0;
     uint8_t height=0, width=0;
@@ -3524,7 +3606,7 @@ bool parseTextPayloadInternal(const uint8_t *data,size_t len,bool carouselContex
       height=format.height;
       width=max(width,format.width);
       const size_t bytes=size_t(format.width/8)*height;
-      if (bytes>len-input-TEXT_GLYPH_META || bytes>sizeof(textState.bitmap)-output) return false;
+      if (bytes>len-input-TEXT_GLYPH_META || bytes>MAX_TEXT_GLYPHS * TEXT_MAX_BITMAP_BYTES-output) return false;
       if (store) {
         memcpy(textState.meta[g],data+input,TEXT_GLYPH_META);
         textState.bitmapOffset[g]=output;
@@ -3535,6 +3617,7 @@ bool parseTextPayloadInternal(const uint8_t *data,size_t len,bool carouselContex
       output+=bytes;
     }
     if (input!=len) return false;
+    bitmapBytes = output;
     if (store) {
       textState.glyphWidth=width;
       textState.glyphHeight=height;
@@ -3551,6 +3634,11 @@ bool parseTextPayloadInternal(const uint8_t *data,size_t len,bool carouselContex
     else return false;
     if (!decodeRecords(uniform,false)) return false;
   }
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  auto *bitmap = static_cast<uint8_t *>(realloc(textState.bitmap, bitmapBytes));
+  if (!bitmap) return false;
+  textState.bitmap = bitmap;
+#endif
   if (!decodeRecords(uniform,true)) return false;
   textState.valid=true;
   textState.glyphCount=requested;
@@ -4621,14 +4709,14 @@ bool startGIFFile(const char *path, bool eventPlayback, bool carouselPlayback, u
 #endif
   // Best-effort only: failure leaves the file-backed fallback path intact.
   prepareGifStage(path,gifSize,expectedCRC);
-  fill_solid(gifFrame,NUM_LEDS,CRGB::Black);
+  if (gifFrame != framebuffer) fill_solid(gifFrame,NUM_LEDS,CRGB::Black);
 #if DEBUG_SERIAL && BULK_PROTOCOL_DEBUG
   Serial.println("GIF NEW alloc");
 #endif
-  gif=new AnimatedGIF();
+  gif = new (std::nothrow) AnimatedGIF();
   if(!gif){
 #if DEBUG_SERIAL
-    Serial.println("GIF NEW alloc FAILED");
+    reportHeap("GIF decoder allocation failed");
 #endif
     releaseGifStage();
     return false;
@@ -4656,6 +4744,7 @@ bool startGIFFile(const char *path, bool eventPlayback, bool carouselPlayback, u
   Serial.println("GIF NEW reset");
 #endif
   gif->reset();
+  if (gifFrame == framebuffer) fill_solid(gifFrame,NUM_LEDS,CRGB::Black);
 #if DEBUG_SERIAL && BULK_PROTOCOL_DEBUG
   Serial.println("GIF NEW reset OK");
 #endif
@@ -4760,7 +4849,8 @@ void updateGIF(){
   if(gifRestartPending){ gif->reset(); gifRestartPending=false; fill_solid(gifFrame,NUM_LEDS,CRGB::Black); }
   gifFrameWasDrawn=false; int delayMs=0; int result=gif->playFrame(false,&delayMs);
   if(!gifFrameWasDrawn){ gif->reset(); gifNextFrameAt=now+10; return; }
-  ::memcpy(framebuffer,gifFrame,LOGICAL_FRAME_BYTES); refreshMatrix();
+  if (framebuffer != gifFrame) ::memcpy(framebuffer,gifFrame,LOGICAL_FRAME_BYTES);
+  refreshMatrix();
 #if IDOTMATRIX_MEMORY_TELEMETRY
   if(gifTelemetryFirstFramePending){
     gifTelemetryFirstFramePending=false;
@@ -5167,6 +5257,25 @@ int8_t nextCarouselSlot(int8_t current) {
   return -1;
 }
 
+static bool loadStoredText(File &file, size_t size, bool carouselContext) {
+  if (!file || size > MAX_TEXT_PAYLOAD || file.size() != size) {
+    if (file) file.close();
+    return false;
+  }
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  auto *payload = static_cast<uint8_t *>(malloc(size));
+#else
+  auto *payload = textPayload;
+#endif
+  const bool read = payload && file.read(payload, size) == size;
+  file.close();
+  const bool parsed = read && parseTextPayloadInternal(payload, size, carouselContext);
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  free(payload);
+#endif
+  return parsed;
+}
+
 bool loadCarouselRawFrame(const char *path, uint32_t expectedSize) {
   const uint32_t required=(uint32_t)NUM_LEDS*3UL;
   if(!littleFsReady || !path || expectedSize!=required) return false;
@@ -5251,14 +5360,8 @@ bool startCarouselSlot(uint8_t slot) {
     }
 #endif
   } else if(m.dataType==3){
-    if(m.mediaSize<=MAX_TEXT_PAYLOAD){
-      File f=LittleFS.open(path,"r");
-      if(f && (uint32_t)f.size()==m.mediaSize){
-        size_t got=f.read(textPayload,m.mediaSize);
-        f.close();
-        if(got==m.mediaSize) started=parseTextPayloadInternal(textPayload,got,true);
-      } else if(f) f.close();
-    }
+    File f=LittleFS.open(path,"r");
+    started=loadStoredText(f,m.mediaSize,true);
   }
   if(!started) return false;
 
@@ -5897,14 +6000,8 @@ bool startPresetSlot(uint8_t localSlot) {
     if(started) gifPresetPlaybackFileActive=true;
     else { gifSize=0; gifStoredOnFS=false; }
   } else {
-    if(m.mediaSize<=MAX_TEXT_PAYLOAD){
-      File f=LittleFS.open(path,"r");
-      if(f && (uint32_t)f.size()==m.mediaSize){
-        size_t got=f.read(textPayload,m.mediaSize);
-        f.close();
-        if(got==m.mediaSize) started=parseTextPayloadInternal(textPayload,got,true);
-      } else if(f) f.close();
-    }
+    File f=LittleFS.open(path,"r");
+    started=loadStoredText(f,m.mediaSize,true);
   }
   if(!started) return false;
 
@@ -5997,6 +6094,10 @@ void resetBulkTransfer(bool removePartialGif=false){
   bulk=BulkTransferState();
   bulkLastRxMs=0;
   textPayloadReceived=0;
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  free(textPayload);
+  textPayload=nullptr;
+#endif
   if(rawRgbData){ free(rawRgbData); rawRgbData=nullptr; }
   rawRgbWriteOffset=0;
   if(carouselImageRxData){ free(carouselImageRxData); carouselImageRxData=nullptr; }
@@ -6113,8 +6214,7 @@ void expireStalledTransfers(uint32_t now){
 #if DEBUG_SERIAL
     Serial.println("PACKET RX timeout; dropping incomplete logical packet");
 #endif
-    packetReceived=packetExpected=0;
-    packetLastRxMs=0;
+    resetNormalPacket();
     resetBulkTransfer(true);
   }
   if(audioRxReceived && audioRxLastMs && (uint32_t)(now-audioRxLastMs)>AUDIO_REASSEMBLY_TIMEOUT_MS){
@@ -6260,7 +6360,7 @@ bool processBulkPacket(const uint8_t *data,size_t len){
     else if(type==2 && startsWithPNG(payload,payloadSize)) bulk.format="PNG";
     else if(type==2 && total==(uint32_t)NUM_LEDS*3UL) bulk.format="RAW RGB";
     else if(type==3) bulk.format="TEXT";
-#if DEBUG_SERIAL && BULK_PROTOCOL_DEBUG
+#if DEBUG_SERIAL && (BULK_PROTOCOL_DEBUG || defined(IDOTMATRIX_BOARD_CLOCKWISE))
     Serial.print("BULK BEGIN type="); Serial.print(type);
     Serial.print(" total="); Serial.print(total);
     Serial.print(" firstPayload="); Serial.print(payloadSize);
@@ -6427,6 +6527,12 @@ bool processBulkPacket(const uint8_t *data,size_t len){
 #endif
       }
     }
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+    if(type==3 && !bulk.presetToFS && !bulk.carouselBuffered && !bulk.carouselToFS){
+      textPayload=static_cast<uint8_t *>(malloc(total));
+      if(!textPayload){ resetBulkTransfer(true); sendTransferAck(type,0x03); return true; }
+    }
+#endif
     if(type==2 && bulk.format=="RAW RGB" && !bulk.carouselBuffered){
       idotMemoryTelemetrySnapshot("raw.before_alloc");
       rawRgbData=(uint8_t*)malloc(total);
@@ -6541,7 +6647,7 @@ bool processBulkPacket(const uint8_t *data,size_t len){
       }
       refreshMatrix();
     }
-#if DEBUG_SERIAL && BULK_PROTOCOL_DEBUG
+#if DEBUG_SERIAL && (BULK_PROTOCOL_DEBUG || defined(IDOTMATRIX_BOARD_CLOCKWISE))
     Serial.print("BULK END type="); Serial.print(type);
     Serial.print(" total="); Serial.print(bulk.receivedSize);
     Serial.print(" chunks="); Serial.print(bulk.chunkCount);
@@ -7273,7 +7379,12 @@ void processFA02Packet(const uint8_t *data,size_t len){
     uint16_t y=2000+data[4];
     uint8_t mo=data[5], d=data[6], h=data[8], mi=data[9], se=data[10];
     if(isValidDateTime(y,mo,d,h,mi,se)){
-      syncYear=y; syncMonth=mo; syncDay=d; syncHour=h; syncMinute=mi; syncSecond=se; syncMillis=monotonicMillis64(); clockSynced=true;
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+      if (!wifiClockSynced)
+#endif
+      {
+        syncYear=y; syncMonth=mo; syncDay=d; syncHour=h; syncMinute=mi; syncSecond=se; syncMillis=monotonicMillis64(); clockSynced=true;
+      }
 #if IDOTMATRIX_RTC_AVAILABLE && IDOTMATRIX_RTC_SYNC_FROM_BLE
       if(!rtcReady) rtcRetryNextAt=millis();
       if(rtcReady){
@@ -7491,6 +7602,73 @@ static bool startsKnownNonAudioFrame(const uint8_t *data, size_t len) {
          (command==0x0A && subcommand==0x80);
 }
 
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+static size_t freeMediaBytes() {
+  const size_t total = LittleFS.totalBytes();
+  const size_t used = LittleFS.usedBytes();
+  return total > used ? total - used : 0;
+}
+
+static bool deferGifForCleanup(const uint8_t *packet, size_t length) {
+  if (length < 22 || packet[2] != 1 || packet[3] != 0 || !startsWithGIF(packet + 16, length - 16) ||
+      bulk.active || pendingGifStart || deferredGifPacket || !littleFsReady ||
+      (displayPin != noDisplayPin && !displayPinVerified)) return false;
+  const uint32_t required = rd32le(packet + 5);
+  if (required <= freeMediaBytes() || required > LittleFS.totalBytes()) return false;
+
+  if (packetBuffer != inlinePacketBuffer) {
+    deferredGifPacket = packetBuffer;
+    packetBuffer = inlinePacketBuffer;
+  } else {
+    deferredGifPacket = static_cast<uint8_t *>(malloc(length));
+    if (!deferredGifPacket) return false;
+    memcpy(deferredGifPacket, packet, length);
+  }
+  deferredGifPacketSize = length;
+  return true;
+}
+
+static void dropDeferredGifPacket() {
+  free(deferredGifPacket);
+  deferredGifPacket = nullptr;
+  deferredGifPacketSize = 0;
+}
+
+static void processDeferredGifCleanup() {
+  if (!deferredGifPacket) return;
+  if (bulk.active || pendingGifStart) {
+    dropDeferredGifPacket();
+    return;
+  }
+  const uint32_t required = rd32le(deferredGifPacket + 5);
+  const size_t before = freeMediaBytes();
+
+  // The assembler defers only the first GIF packet, with no RX or promotion pending.
+  for (const char *path : GIF_RX_FILES) LittleFS.remove(path);
+  if (!gifEventPlaybackFileActive) LittleFS.remove(EVENT_GIF_PLAY_FILE);
+  LittleFS.remove(GIF_PLAY_BACKUP_FILE);
+
+  const size_t available = freeMediaBytes();
+  const bool livePreview = gifStoredOnFS && !gifEventPlaybackFileActive &&
+                           !gifCarouselPlaybackFileActive && !gifPresetPlaybackFileActive;
+  const size_t previewSize = storedFileSize(GIF_PLAY_FILE);
+  if (required > available && required - available <= previewSize) {
+    if (livePreview) {
+      stopGIFPlayback();
+      gifDecoderOpenPending = false;
+      gifStoredOnFS = false;
+      gifSize = gifPlayCRC = 0;
+    }
+    gifCacheInvalidatePath(GIF_PLAY_FILE);
+    LittleFS.remove(GIF_PLAY_FILE);
+  }
+  Serial.printf("GIF preview cleanup: free %lu -> %lu, need %lu\n",
+                (unsigned long)before, (unsigned long)freeMediaBytes(), (unsigned long)required);
+  processFA02Packet(deferredGifPacket, deferredGifPacketSize);
+  dropDeferredGifPacket();
+}
+#endif
+
 // Normal LE16-length FA02 assembler. Audio/Rhythm never enters this path.
 static void processNormalFA02Bytes(const uint8_t *data, size_t len, uint32_t now) {
   size_t offset=0;
@@ -7510,15 +7688,27 @@ static void processNormalFA02Bytes(const uint8_t *data, size_t len, uint32_t now
 #if DEBUG_SERIAL
         Serial.print("PACKET RX invalid declared length="); Serial.println(packetExpected);
 #endif
-        packetExpected=packetReceived=0; packetLastRxMs=0; resetBulkTransfer(true); return;
+        resetNormalPacket(); resetBulkTransfer(true); return;
       }
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+      if (packetExpected > sizeof(inlinePacketBuffer)) {
+        auto *allocated = static_cast<uint8_t *>(malloc(packetExpected));
+        if (!allocated) {
+          resetNormalPacket();
+          resetBulkTransfer(true);
+          return;
+        }
+        memcpy(allocated, inlinePacketBuffer, 2);
+        packetBuffer = allocated;
+      }
+#endif
     }
 
     const size_t needed=(size_t)packetExpected-packetReceived;
     const size_t available=len-offset;
     const size_t take=needed<available?needed:available;
     if(packetReceived+take>MAX_PACKET_SIZE){
-      packetExpected=packetReceived=0; packetLastRxMs=0; resetBulkTransfer(true); return;
+      resetNormalPacket(); resetBulkTransfer(true); return;
     }
     if(take){
       ::memcpy(packetBuffer+packetReceived,data+offset,take);
@@ -7538,9 +7728,14 @@ static void processNormalFA02Bytes(const uint8_t *data, size_t len, uint32_t now
 
     if(packetReceived<packetExpected) return;
 
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+    if (deferGifForCleanup(packetBuffer, packetExpected)) {
+      resetNormalPacket();
+      return;
+    }
+#endif
     processFA02Packet(packetBuffer,packetExpected);
-    packetReceived=packetExpected=0;
-    packetLastRxMs=0;
+    resetNormalPacket();
   }
 }
 
@@ -7694,8 +7889,10 @@ void handleBleDisconnected(){
   // loopTask publishes it, simply discard the descriptor. Active bank journals
   // are intentionally left on disk for reboot/restart recovery.
   if(deferredCarouselBankSetup.active) deferredCarouselBankSetup=DeferredCarouselBankSetupState();
-  packetReceived=packetExpected=0;
-  packetLastRxMs=0;
+  resetNormalPacket();
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  dropDeferredGifPacket();
+#endif
   resetAudioReassembly();
   // If a complete Preset/Carousel is awaiting loopTask publication, preserve
   // its staged file and descriptor across disconnect. The loop can safely
@@ -7829,6 +8026,7 @@ void resetRuntimeState(){
   freeGIF();
   if(littleFsReady && queuedGifSlot>=0 && queuedGifSlot<=1) LittleFS.remove(GIF_RX_FILES[(uint8_t)queuedGifSlot]);
   alarmActive=false; activeAlarmSlot=0xFF; alarmEndsAt=0;
+  releaseEventBackground();
   scheduleActiveIndex=-1; scheduleFailedIndex=-1;
   diyMode=false; effectState.valid=false; textState.valid=false; audioState.valid=false;
   resetAudioReassembly();
@@ -8393,11 +8591,7 @@ bool loadScheduleMedia(uint8_t idx) {
   }
 
   if (a.contentType == SCHEDULE_CONTENT_TEXT) {
-    if (a.mediaSize > MAX_TEXT_PAYLOAD) { f.close(); return false; }
-    size_t got = f.read(textPayload, a.mediaSize); f.close();
-    if (got != a.mediaSize) return false;
-    parseTextPayload(textPayload, got);
-    return true;
+    return loadStoredText(f, a.mediaSize, false);
   }
 
   if (a.contentType == SCHEDULE_CONTENT_IMAGE) {
@@ -8434,13 +8628,12 @@ void stopScheduleActivity() {
     if (slot >= 0) startCarouselSlot((uint8_t)slot);
     schedulePreviousCarousel = false;
     schedulePreviousCarouselSlot = -1;
+    releaseEventBackground();
     return;
   }
   schedulePreviousCarousel = false;
   schedulePreviousCarouselSlot = -1;
-  if (schedulePreviousMode == DISPLAY_SOLID || schedulePreviousMode == DISPLAY_RAW ||
-      schedulePreviousMode == DISPLAY_GRAFFITI) {
-    ::memcpy(framebuffer, scheduleSavedFrame, LOGICAL_FRAME_BYTES);
+  if (restoreEventBackground(schedulePreviousMode)) {
     displayMode = schedulePreviousMode;
     refreshMatrix();
   } else if (hasValidTimeSource()) {
@@ -8451,6 +8644,7 @@ void stopScheduleActivity() {
     clearFramebuffer(); refreshMatrix();
   }
 
+  releaseEventBackground();
 #if PNG_DIAG_SERIAL
   Serial.println("S-");
 #endif
@@ -8464,7 +8658,7 @@ void startScheduleActivity(uint8_t idx) {
   schedulePreviousMode = displayMode;
   schedulePreviousCarousel = carouselActive || gifCarouselPlaybackFileActive;
   schedulePreviousCarouselSlot = carouselActiveSlot;
-  ::memcpy(scheduleSavedFrame, framebuffer, LOGICAL_FRAME_BYTES);
+  saveEventBackground(schedulePreviousMode, schedulePreviousCarousel);
   if (loadScheduleMedia(idx)) {
     scheduleActiveIndex = idx;
     scheduleFailedIndex = -1;
@@ -8482,6 +8676,7 @@ void startScheduleActivity(uint8_t idx) {
     // Without this latch updateSchedule() would retry the decode on every loop
     // iteration, which can saturate CPU/heap and make the device appear locked.
     scheduleFailedIndex = (int8_t)idx;
+    releaseEventBackground();
 #if DEBUG_SERIAL
     Serial.print("SCH START FAIL i="); Serial.print(idx);
     Serial.print(" type="); Serial.println(scheduleActivities[idx].contentType);
@@ -8786,7 +8981,13 @@ void clearPersistentDeviceState() {
     bp.putUChar(BRIGHTNESS_NVS_KEY, brightnessPercent);
     bp.end();
   }
-  clockStyle=0; clock24h=false; clockShowDate=false; clockDatePreference=false; clockColor=defaultClockColor(0);
+  clockStyle=0;
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  clock24h=true;
+#else
+  clock24h=false;
+#endif
+  clockShowDate=false; clockDatePreference=false; clockColor=defaultClockColor(0);
   clockPrefsDirty=false;
   energySaving=EnergySavingState();
   flipped180=false;
@@ -8809,7 +9010,7 @@ void applyBootDisplayPolicy() {
   displayMode=DISPLAY_CLOCK;
   clockCycleStartedAt=millis();
   renderClock();
-  Serial.println("BOOT POLICY: CLOCK (sync from app)");
+  Serial.println("BOOT POLICY: CLOCK (Wi-Fi or App time sync)");
 #else
   int8_t slot=nextCarouselSlot(-1);
   if (slot>=0) {
@@ -9122,14 +9323,27 @@ void setup(){
 #endif
   #endif
 #endif
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  reportHeap("before logical framebuffer");
+#endif
   idotMemoryTelemetrySnapshot("setup.before_logical_buffers");
 // Allocate the logical display buffers at runtime. This is essential for the
   // 64x64 profile: three static 4096-pixel CRGB buffers would consume ~36 KB
   // of .bss and overflow the ESP32 DRAM linker segment.
   framebuffer = (CRGB*)malloc(LOGICAL_FRAME_BYTES);
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  // The panel is refreshed after decoding, so GIF frames can be drawn directly
+  // into the display buffer without holding a second full RGB canvas.
+  gifFrame = framebuffer;
+#else
   gifFrame = (CRGB*)malloc(LOGICAL_FRAME_BYTES);
   scheduleSavedFrame = (CRGB*)malloc(LOGICAL_FRAME_BYTES);
-  if (!framebuffer || !gifFrame || !scheduleSavedFrame) {
+#endif
+  if (!framebuffer || !gifFrame
+#if !defined(IDOTMATRIX_BOARD_CLOCKWISE)
+      || !scheduleSavedFrame
+#endif
+  ) {
 #if DEBUG_SERIAL
     Serial.print("FATAL: logical framebuffer allocation failed, bytes each=");
     Serial.print(LOGICAL_FRAME_BYTES);
@@ -9148,11 +9362,12 @@ void setup(){
   }
   fill_solid(framebuffer, NUM_LEDS, CRGB::Black);
   fill_solid(gifFrame, NUM_LEDS, CRGB::Black);
-  fill_solid(scheduleSavedFrame, NUM_LEDS, CRGB::Black);
+  if (scheduleSavedFrame) fill_solid(scheduleSavedFrame, NUM_LEDS, CRGB::Black);
   idotMemoryTelemetrySnapshot("setup.after_logical_buffers");
 #if DEBUG_SERIAL
   Serial.print("LOGICAL BUFFERS: "); Serial.print(MATRIX_WIDTH); Serial.print('x'); Serial.print(MATRIX_HEIGHT);
-  Serial.print(" x3, bytes="); Serial.print(LOGICAL_FRAME_BYTES * 3U);
+  const unsigned frameCount = scheduleSavedFrame ? 3 : (gifFrame == framebuffer ? 1 : 2);
+  Serial.print(" frames="); Serial.print(frameCount); Serial.print(" bytes="); Serial.print(LOGICAL_FRAME_BYTES * frameCount);
   Serial.print(" freeHeap="); Serial.println(ESP.getFreeHeap());
   Serial.print("DISPLAY BACKEND: ");
 #if DISPLAY_BACKEND == DISPLAY_BACKEND_HUB75
@@ -9276,6 +9491,9 @@ void setup(){
   FastLED.addLeds<LED_TYPE,MATRIX_PIN,COLOR_ORDER>(leds,PHYSICAL_NUM_LEDS);
 #elif DISPLAY_BACKEND == DISPLAY_BACKEND_HUB75
   {
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+    reportHeap("before HUB75 DMA");
+#endif
     idotMemoryTelemetrySnapshot("setup.before_hub75");
 #if defined(IDOTMATRIX_BOARD_WAVESHARE_S3_RGB_MATRIX) && DEBUG_SERIAL
     Serial.println("BOOT CHECKPOINT: entering HUB75 initialization");
@@ -9303,6 +9521,9 @@ void setup(){
       while(true) delay(1000);
     }
     idotMemoryTelemetrySnapshot("setup.after_hub75");
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+    reportHeap("after HUB75 DMA");
+#endif
   }
 #endif
 #if defined(IDOTMATRIX_BOARD_CLOCKWISE)
@@ -9331,15 +9552,34 @@ void setup(){
 
   applyBootDisplayPolicy();
 
-#if IDOTMATRIX_USE_NIMBLE
-  // The WLED-qualified Waveshare/Tasmota stack does not bundle the legacy
-  // Arduino BLE compatibility headers. Use the same NimBLE-Arduino 2.x family
-  // already qualified by the iDotMatrix WLED Usermod on this board.
 #if defined(IDOTMATRIX_BOARD_CLOCKWISE)
   uint8_t mac[6]{};
   if (esp_read_mac(mac, ESP_MAC_BT) == ESP_OK)
     snprintf(DEVICE_NAME, sizeof(DEVICE_NAME), "IDM_64*64_%02X%02X", mac[4], mac[5]);
   Serial.printf("APP advertising %s screenType=%u\n", DEVICE_NAME, IDOTMATRIX_SCREEN_TYPE);
+  clockwiseWifi::begin(DEVICE_NAME, []() {
+    if (!lockRuntimeState()) return true;
+    const bool enabled = clock24h;
+    unlockRuntimeState();
+    return enabled;
+  }, [](bool enabled) {
+    if (!lockRuntimeState()) return;
+    clock24h = enabled;
+    scheduleClockPreferencesSave();
+    if (displayMode == DISPLAY_CLOCK) renderClock();
+    unlockRuntimeState();
+  });
+
+#endif
+
+
+#if IDOTMATRIX_USE_NIMBLE
+  // The WLED-qualified Waveshare/Tasmota stack does not bundle the legacy
+  // Arduino BLE compatibility headers. Use the same NimBLE-Arduino 2.x family
+  // already qualified by the iDotMatrix WLED Usermod on this board.
+
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  reportHeap("before BLE initialization");
 #endif
   if(!NimBLEDevice::init(DEVICE_NAME)){
 #if DEBUG_SERIAL
@@ -9419,6 +9659,7 @@ void setup(){
   adv->setAdvertisementData(ad);
   adv->setScanResponseData(scan);
   adv->enableScanResponse(true);
+
   if(!adv->start()){
 #if DEBUG_SERIAL
     Serial.println("FATAL: NimBLE advertising start failed");
@@ -9502,6 +9743,10 @@ static void updateClockwiseBootButton(uint32_t now) {
   }
   const uint32_t heldMs = changedAt - pressedAt;
   if (heldMs >= factoryResetHoldMs) {
+    if (!clockwiseWifi::clearSettings()) {
+      Serial.println("BOOT: could not clear Wi-Fi settings");
+      return;
+    }
     resetRuntimeState();
     if (displayPin == noDisplayPin) {
       Serial.println("BOOT: factory reset complete");
@@ -9540,7 +9785,28 @@ void loop(){
   // off nimble_host and preserves ACK pacing for the next bulk transfer.
   processDeferredAssetCommit();
 #if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  processDeferredGifCleanup();
   updateClockwiseBootButton(millis());
+  if (displayMode != DISPLAY_TEXT && textState.bitmap) {
+    free(textState.bitmap);
+    textState.bitmap = nullptr;
+    textState.valid = false;
+  }
+  static uint32_t wifiClockCheckedAt = 0;
+  if (now - wifiClockCheckedAt >= 250) {
+    wifiClockCheckedAt = now;
+    std::tm local{};
+    if (clockwiseWifi::localTime(local)) {
+      syncYear = local.tm_year + 1900;
+      syncMonth = local.tm_mon + 1;
+      syncDay = local.tm_mday;
+      syncHour = local.tm_hour;
+      syncMinute = local.tm_min;
+      syncSecond = local.tm_sec;
+      syncMillis = monotonicMillis64();
+      clockSynced = wifiClockSynced = true;
+    }
+  }
 #endif
   // 06/02 may publish a complete Preset candidate bank and start its
   // first decoder. Keep that work on loopTask as well, then perform any
@@ -9645,7 +9911,7 @@ void loop(){
       gifStoredOnFS=false;
       gifSize=0;
     } else {
-#if DEBUG_SERIAL && BULK_PROTOCOL_DEBUG
+#if DEBUG_SERIAL && (BULK_PROTOCOL_DEBUG || defined(IDOTMATRIX_BOARD_CLOCKWISE))
       Serial.println("GIF PLAY START OK");
       reportHeap("after fresh GIF open");
 #endif
@@ -9736,5 +10002,8 @@ void loop(){
     BLEDevice::startAdvertising();
 #endif
   }
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  clockwiseWifi::loop();
+#endif
   delay(5);
 }
