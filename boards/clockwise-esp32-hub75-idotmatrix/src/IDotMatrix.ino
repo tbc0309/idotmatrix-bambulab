@@ -2108,10 +2108,31 @@ uint8_t brightnessToOutput(uint8_t percent) {
   percent = min((uint8_t)100, percent);
   const uint8_t output = ((uint16_t)percent * MAX_LED_BRIGHTNESS) / 100;
 #if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  constexpr uint8_t fullPanelOutputLimit = 100;
   // Solid and effect modes can light every pixel at once. Keep the previously
-  // supported output ceiling for these modes to limit the panel's current draw.
+  // tested full-panel output ceiling for these modes.
   if (displayMode == DISPLAY_SOLID || displayMode == DISPLAY_EFFECT)
-    return min(output, uint8_t(50));
+    return min(output, fullPanelOutputLimit);
+
+  // The panel scans the upper and lower halves together. Limit the busiest
+  // row pair, counting saturated primary colors as fully lit.
+  if (framebuffer && output > fullPanelOutputLimit) {
+    constexpr uint16_t halfRows = MATRIX_HEIGHT / 2;
+    constexpr uint32_t budget = uint32_t(fullPanelOutputLimit) * 2 * MATRIX_WIDTH * 255U;
+    uint32_t peakLoad = 0;
+    for (uint16_t y = 0; y < halfRows; ++y) {
+      uint32_t pairLoad = 0;
+      for (uint16_t x = 0; x < MATRIX_WIDTH; ++x) {
+        const CRGB &upper = framebuffer[logicalIndex(x, y)];
+        const CRGB &lower = framebuffer[logicalIndex(x, y + halfRows)];
+        pairLoad += max(upper.r, max(upper.g, upper.b));
+        pairLoad += max(lower.r, max(lower.g, lower.b));
+      }
+      peakLoad = max(peakLoad, pairLoad);
+    }
+    if (peakLoad * output > budget)
+      return uint8_t(budget / peakLoad);
+  }
 #endif
   return output;
 }
