@@ -6,6 +6,11 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include "IDotMatrixHardwareConfig.h"
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  #include <fcntl.h>
+  #include <sys/stat.h>
+  #include <unistd.h>
+#endif
 #include "IDotMatrixProtocolGuards.h"
 #include "IDotMatrixBuzzerPolicy.h"
 #include "IDotMatrixAudioOutput.h"
@@ -278,7 +283,11 @@ static char DEVICE_NAME[] = "IDM_64*64_4C42";
 // Local hardware/test ceiling expressed on the common 0..255 brightness scale.
 // WS2812 applies it through FastLED global brightness. HUB75 applies it through
 // MatrixPanel_I2S_DMA output-enable timing so framebuffer RGB values stay 8-bit.
-#define MAX_LED_BRIGHTNESS 50
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  #define MAX_LED_BRIGHTNESS 255
+#else
+  #define MAX_LED_BRIGHTNESS 50
+#endif
 
 // Brightness persistence
 #define BRIGHTNESS_NVS_NAMESPACE "idotmatrix"
@@ -596,7 +605,7 @@ struct EnergySavingState {
 
 // Last brightness actually pushed to FastLED. This lets static display modes
 // react when an ECO interval begins/ends even if no renderer requests refresh.
-uint8_t lastAppliedOutputBrightness = 0xFF;
+int16_t lastAppliedOutputBrightness = -1;
 uint32_t lastEnergySavingCheckMs = 0;
 
 // ======================================================
@@ -1718,7 +1727,9 @@ DeferredPresetActivationState deferredPresetActivation;
 // PACKET / BULK
 // ======================================================
 #if defined(IDOTMATRIX_BOARD_CLOCKWISE)
-static uint8_t inlinePacketBuffer[520];
+// The App splits standard media into 4096-byte chunks with up to 16 bytes
+// of framing. Reuse this buffer across chunks and leave larger packets on demand.
+static uint8_t inlinePacketBuffer[4096 + 16];
 static uint8_t *packetBuffer = inlinePacketBuffer;
 static inline uint32_t rd32le(const uint8_t *p);
 static uint8_t *deferredGifPacket = nullptr;
@@ -2120,7 +2131,7 @@ void clearPhysicalDisplay() {
 void refreshMatrix() {
   if (!screenOn || (carouselUploadBlackout && !carouselTransferIndicatorVisible)) {
     clearPhysicalDisplay();
-    lastAppliedOutputBrightness = 0xFF;
+    lastAppliedOutputBrightness = -1;
     return;
   }
 
@@ -3988,6 +3999,7 @@ uint32_t gifStageFallback = 0;
   #define IDOTMATRIX_GIF_CACHE_STORAGE_ENTRIES 1
 #endif
 
+constexpr char LITTLEFS_MOUNT_PATH[] = "/littlefs";
 constexpr size_t GIF_CACHE_PATH_MAX = 48U;
 struct GifCacheEntry {
   bool valid = false;
@@ -4013,7 +4025,11 @@ int8_t gifCacheActiveIndex = -1;
 struct GifSourceHandle {
   uint8_t source = 0; // 0=LittleFS, 1=transient stage, 2=persistent source cache
   int8_t cacheIndex = -1;
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  int fd = -1;
+#else
   File file;
+#endif
 };
 
 struct CarouselGifPrefetchState {
@@ -4593,7 +4609,7 @@ void freeGIF(){
 // LittleFS file behind one callback API.
 void *GIFOpenFile(const char *fname, int32_t *pSize){
   if(!pSize || !fname) return nullptr;
-  GifSourceHandle *h=new GifSourceHandle();
+  auto *h = new (std::nothrow) GifSourceHandle();
   if(!h) return nullptr;
   if(gifCacheActiveIndex>=0){
     GifCacheEntry &e=gifCache[(uint8_t)gifCacheActiveIndex];
@@ -4610,15 +4626,39 @@ void *GIFOpenFile(const char *fname, int32_t *pSize){
     return (void *)h;
   }
   if(!littleFsReady){ delete h; return nullptr; }
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  // Use the LittleFS VFS descriptor directly. A concurrent RX stream can
+  // then reuse the existing stdio slots while this decoder plays.
+  char path[sizeof(LITTLEFS_MOUNT_PATH) + GIF_CACHE_PATH_MAX];
+  const int pathLength = snprintf(path, sizeof(path), "%s%s", LITTLEFS_MOUNT_PATH, fname);
+  if (pathLength < 0 || size_t(pathLength) >= sizeof(path)) {
+    delete h;
+    return nullptr;
+  }
+  h->fd = ::open(path, O_RDONLY);
+  struct stat fileInfo{};
+  if (h->fd < 0 || ::fstat(h->fd, &fileInfo) != 0 || fileInfo.st_size <= 0 ||
+      fileInfo.st_size > INT32_MAX) {
+    if (h->fd >= 0) ::close(h->fd);
+    delete h;
+    return nullptr;
+  }
+  *pSize = int32_t(fileInfo.st_size);
+#else
   h->file=LittleFS.open(fname,"r");
   if(!h->file){ delete h; return nullptr; }
   *pSize=(int32_t)h->file.size();
+#endif
   return (void *)h;
 }
 void GIFCloseFile(void *pHandle){
   GifSourceHandle *h=(GifSourceHandle *)pHandle;
   if(!h) return;
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  if (h->fd >= 0) ::close(h->fd);
+#else
   if(h->source==0 && h->file) h->file.close();
+#endif
   delete h;
 }
 int32_t GIFReadFile(GIFFILE *pFile,uint8_t *pBuf,int32_t iLen){
@@ -4642,10 +4682,18 @@ int32_t GIFReadFile(GIFFILE *pFile,uint8_t *pBuf,int32_t iLen){
     pFile->iPos+=iLen;
     return iLen;
   }
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  if (h->fd < 0) return 0;
+  const ssize_t count = ::read(h->fd, pBuf, size_t(iLen));
+  if (count <= 0) return 0;
+  pFile->iPos += int32_t(count);
+  return int32_t(count);
+#else
   if(!h->file) return 0;
   int32_t n=(int32_t)h->file.read(pBuf,(size_t)iLen);
   pFile->iPos=(int32_t)h->file.position();
   return n;
+#endif
 }
 int32_t GIFSeekFile(GIFFILE *pFile,int32_t iPosition){
   if(!pFile) return -1;
@@ -4665,8 +4713,15 @@ int32_t GIFSeekFile(GIFFILE *pFile,int32_t iPosition){
     pFile->iPos=iPosition;
     return pFile->iPos;
   }
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  if (h->fd < 0) return -1;
+  const off_t position = ::lseek(h->fd, iPosition, SEEK_SET);
+  if (position < 0) return -1;
+  pFile->iPos = int32_t(position);
+#else
   if(!h->file || !h->file.seek((uint32_t)iPosition,SeekSet)) return -1;
   pFile->iPos=(int32_t)h->file.position();
+#endif
   return pFile->iPos;
 }
 
@@ -6354,7 +6409,7 @@ bool processBulkPacket(const uint8_t *data,size_t len){
     else if(type==2 && startsWithPNG(payload,payloadSize)) bulk.format="PNG";
     else if(type==2 && total==(uint32_t)NUM_LEDS*3UL) bulk.format="RAW RGB";
     else if(type==3) bulk.format="TEXT";
-#if DEBUG_SERIAL && (BULK_PROTOCOL_DEBUG || defined(IDOTMATRIX_BOARD_CLOCKWISE))
+#if DEBUG_SERIAL && BULK_PROTOCOL_DEBUG
     Serial.print("BULK BEGIN type="); Serial.print(type);
     Serial.print(" total="); Serial.print(total);
     Serial.print(" firstPayload="); Serial.print(payloadSize);
@@ -6641,7 +6696,7 @@ bool processBulkPacket(const uint8_t *data,size_t len){
       }
       refreshMatrix();
     }
-#if DEBUG_SERIAL && (BULK_PROTOCOL_DEBUG || defined(IDOTMATRIX_BOARD_CLOCKWISE))
+#if DEBUG_SERIAL && BULK_PROTOCOL_DEBUG
     Serial.print("BULK END type="); Serial.print(type);
     Serial.print(" total="); Serial.print(bulk.receivedSize);
     Serial.print(" chunks="); Serial.print(bulk.chunkCount);
@@ -7919,8 +7974,9 @@ static DeviceInfoCallbacks deviceInfoCallbacks;
 #endif
 class FA02Callbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo&) override {
-    const std::string value=c->getValue(); if(value.empty()) return;
-#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+    const auto value = c->getValue();
+    if (value.size() == 0) return;
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE) && DEBUG_SERIAL_VERBOSE
     static uint32_t last = 0;
     const uint32_t now = millis();
     if (value.size() <= 24 || now - last >= 250) {
@@ -7931,7 +7987,7 @@ class FA02Callbacks : public NimBLECharacteristicCallbacks {
     }
 #endif
     if(!lockRuntimeState()) return;
-    processFA02Write(reinterpret_cast<const uint8_t*>(value.data()),value.size());
+    processFA02Write(value.data(), value.size());
     unlockRuntimeState();
   }
 };
@@ -9439,7 +9495,7 @@ void setup(){
     }
   }
 #endif
-  littleFsReady=LittleFS.begin(false);
+  littleFsReady=LittleFS.begin(false, LITTLEFS_MOUNT_PATH);
 #if LITTLEFS_FORMAT_ON_MOUNT_FAIL
   if(!littleFsReady){
 #if DEBUG_SERIAL
@@ -9447,7 +9503,7 @@ void setup(){
 #endif
     // Reuse the Arduino-ESP32 mount-and-format path that older builds used,
     // but only after the explicit opt-in above.
-    littleFsReady=LittleFS.begin(true);
+    littleFsReady=LittleFS.begin(true, LITTLEFS_MOUNT_PATH);
   }
 #endif
 #if DEBUG_SERIAL
@@ -9592,6 +9648,11 @@ void setup(){
   }
   fa02=fas->createCharacteristic(NimBLEUUID(uint16_t(0xFA02)),NIMBLE_PROPERTY::WRITE|NIMBLE_PROPERTY::WRITE_NR); fa02->setCallbacks(&fa02CallbacksInstance);
 #if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  // FA02 is write-only. Grow NimBLE's value buffer before any decoder is
+  // active, so the first long ATT write cannot relocate it into the GIF heap.
+  static constexpr uint8_t emptyFa02Value[BLE_ATT_ATTR_MAX_LEN] = {};
+  fa02->setValue(emptyFa02Value, sizeof(emptyFa02Value));
+  fa02->setValue(emptyFa02Value, 0);
   // Match the FA02 user-description descriptor exposed by the reference panel.
   auto* fa02Description = fa02->createDescriptor("2901", NIMBLE_PROPERTY::READ);
   if (fa02Description) {
@@ -9868,7 +9929,7 @@ void loop(){
       gifStoredOnFS=false;
       gifSize=0;
     } else {
-#if DEBUG_SERIAL && (BULK_PROTOCOL_DEBUG || defined(IDOTMATRIX_BOARD_CLOCKWISE))
+#if DEBUG_SERIAL && BULK_PROTOCOL_DEBUG
       Serial.println("GIF PLAY START OK");
       reportHeap("after fresh GIF open");
 #endif
