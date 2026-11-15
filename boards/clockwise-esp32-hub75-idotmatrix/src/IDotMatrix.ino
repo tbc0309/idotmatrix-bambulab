@@ -2106,7 +2106,14 @@ uint8_t effectiveBrightnessPercent() {
 
 uint8_t brightnessToOutput(uint8_t percent) {
   percent = min((uint8_t)100, percent);
-  return ((uint16_t)percent * MAX_LED_BRIGHTNESS) / 100;
+  const uint8_t output = ((uint16_t)percent * MAX_LED_BRIGHTNESS) / 100;
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  // Solid and effect modes can light every pixel at once. Keep the previously
+  // supported output ceiling for these modes to limit the panel's current draw.
+  if (displayMode == DISPLAY_SOLID || displayMode == DISPLAY_EFFECT)
+    return min(output, uint8_t(50));
+#endif
+  return output;
 }
 
 CRGB scaleOutputBrightness(const CRGB &input, uint8_t level) {
@@ -2159,7 +2166,7 @@ void refreshMatrix() {
   // MatrixPanel_I2S_DMA controls panel brightness through the output-enable
   // timing. Do not scale RGB channels here: doing so destroys gradient
   // resolution before the driver's 8-bit bitplanes are generated.
-  if (outputBrightness != lastAppliedOutputBrightness)
+  if (lastAppliedOutputBrightness < 0 || outputBrightness < lastAppliedOutputBrightness)
     hub75Matrix->setBrightness8(outputBrightness);
   for (uint16_t py=0; py<PHYSICAL_MATRIX_HEIGHT; ++py) {
     for (uint16_t px=0; px<PHYSICAL_MATRIX_WIDTH; ++px) {
@@ -2172,6 +2179,10 @@ void refreshMatrix() {
       hub75Matrix->drawPixelRGB888(outX,outY,c.r,c.g,c.b);
     }
   }
+  // On a single-buffer panel the old frame is still visible while drawing.
+  // Raise the output only after replacing a potentially all-lit frame.
+  if (lastAppliedOutputBrightness >= 0 && outputBrightness > lastAppliedOutputBrightness)
+    hub75Matrix->setBrightness8(outputBrightness);
 #else
   #error "Unsupported DISPLAY_BACKEND"
 #endif
