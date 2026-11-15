@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <Arduino.h>
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
@@ -659,9 +660,16 @@ struct AudioState {
   uint8_t mode = 0;
   uint8_t level = 0;
   uint8_t bands[8] = {0};
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  uint8_t wireBands[16] = {};
+#endif
   uint32_t lastPacketMs = 0;
   uint32_t packetCounter = 0;
 } audioState;
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+bool audioFramePending = false;
+bool audioEffectChanged = false;
+#endif
 
 
 // ======================================================
@@ -6977,28 +6985,183 @@ static void renderAudioHorizontalFromCenter(const uint8_t *b) {
   }
 }
 
-void renderAudio() {
-  if(!audioState.valid) return;
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+#include "ClockwiseRhythmArt.h"
 
-  if (!audioState.fft) {
-    switch(audioState.mode) {
-      case 0: renderAudioBreakdancer(audioState.level); break;  // LEVEL 1
-      case 1: renderAudioHeartLevel(audioState.level); break;   // LEVEL 2
-      case 2: renderAudioFakeSpectrum(audioState.level); break; // LEVEL 3
-      case 3: renderAudioPurpleFace(audioState.level); break; // LEVEL 4
-      default: renderAudioObservedFace(audioState.level); break; // LEVEL 5
+struct ClockwiseRhythmPlayback {
+  uint32_t frameAt = 0;
+  uint8_t mode = 0xff;
+  uint8_t frame = 0;
+} clockwiseRhythmPlayback;
+
+static CRGB rhythmColor(uint16_t rgb) {
+  const uint8_t red = rgb >> 11;
+  const uint8_t green = (rgb >> 5) & 63U;
+  const uint8_t blue = rgb & 31U;
+  return CRGB((red << 3) | (red >> 2), (green << 2) | (green >> 4), (blue << 3) | (blue >> 2));
+}
+
+static void renderClockwiseRhythm() {
+  using namespace clockwiseRhythm;
+  clearFramebuffer();
+  const auto& effect = levelEffects[audioState.mode];
+  auto& playback = clockwiseRhythmPlayback;
+  const uint32_t now = millis();
+  if (playback.mode != audioState.mode) {
+    playback = {now, audioState.mode, 0};
+  }
+  const uint16_t interval = effect.frameMs * (16 - audioState.level) / 12;
+  if (audioState.level == 0) {
+    playback.frameAt = now;
+  } else if (now - playback.frameAt >= interval) {
+    playback.frame = (playback.frame + 1) % effect.frameCount;
+    playback.frameAt = now;
+  }
+  const auto& packed = effect.frames[playback.frame];
+  for (uint16_t i = 0; i < 256; ++i) {
+    const uint8_t colorIndex = (packed[i / 2] >> ((i % 2) * 4)) & 0x0fU;
+    if (colorIndex) putPixel(i % 16, i / 16, rhythmColor(effect.palette[colorIndex]));
+  }
+  scaleLegacy16CanvasToLogical();
+}
+// The app sends a display-ordered pair of mirrored eight-band halves.
+static void renderClockwiseSpectrum() {
+  static constexpr uint32_t palettes[5][16] = {
+    {0x04c9ff,0x2b7aff,0x5034ff,0x7e00ff,0xab00ff,0xdb00ff,0xfd00fd,0xff00b5,
+     0xff0051,0xff2100,0xff2000,0xff4d00,0xff7d00,0xffa900,0xffd200,0xfff100},
+    {0x7aff0e,0xfff300,0xff1d10,0xcb46df,0x2a96ff,0x61f52f,0xfffe01,0xff1d10,
+     0xff1d10,0xfffe01,0x61f52f,0x2a96ff,0xcb46df,0xff1d10,0xfff300,0x7aff0e},
+    {0x74f101,0x92fb00,0xc3ff00,0xf0ff00,0xffea14,0xffac4a,0xff5f8d,0xff1fca,
+     0xfa00f6,0x6883ff,0x00e5ff,0x15aeff,0x3967ff,0x5a49ff,0x7b5dff,0x9781ff},
+    {0x02dcff,0x1ac7ff,0x39aaff,0x5e89ff,0x8862ff,0xb13eff,0xd421ff,0xf209ff,
+     0xff00f0,0xff00d6,0xff05b3,0xff118f,0xff2167,0xff3241,0xff4120,0xff4c07},
+    {0x0001ff,0x0001ff,0x00faff,0x00faff,0xff00ad,0xff00ad,0x9c00ff,0x9c00ff,
+     0x0001ff,0x9c00ff,0xff00ad,0xff00ad,0x00faff,0x00faff,0x0001ff,0x0001ff},
+  };
+  static constexpr uint8_t heartTop[] = {2,5,3,2,2,2,3,4,4,3,2,2,2,3,5,2};
+  static constexpr uint8_t heartBottom[] = {9,6,7,9,10,11,12,13,13,12,11,10,9,7,6,9};
+  const uint8_t mode = audioState.mode;
+  uint8_t heights[16];
+  // The wire range is 0..12. Match the preview's eight rows per half.
+  for (uint8_t i = 0; i < 16; ++i) {
+    heights[i] = (2 * bandHeight(audioState.wireBands[i]) + 2) / 3;
+  }
+  if (mode != 4) {
+    // Recreate the Android preview's arrangement from the available wire values.
+    // This only affects spatial placement; it does not change sampling cadence.
+    static constexpr uint8_t rankForColumn[] = {1,3,5,7,9,11,13,15,14,12,10,8,6,4,2,0};
+    uint8_t ranked[16];
+    memcpy(ranked, heights, sizeof(ranked));
+    std::sort(ranked, ranked + 16);
+    for (uint8_t i = 0; i < 16; ++i) {
+      const uint8_t height = ranked[rankForColumn[i]];
+      heights[i] = i == 7 || i == 8 || height <= 1 ? height : height * 2 / 3;
+    }
+  }
+  clearFramebuffer();
+  for (uint8_t column = 0; column < 16; ++column) {
+    uint8_t height = heights[column];
+    if (mode >= 2 && column >= 1 && column <= 2) height = heights[16 - column];
+    if (mode == 4) {
+      // The hourglass has its own per-column caps, rather than the rank layout.
+      static constexpr uint8_t caps[] = {3,4,3,2,7,4,5,8,8,5,4,7,2,3,4,3};
+      if (height >= caps[column]) {
+        if (column <= 3 || column >= 12) {
+          const uint32_t phase = audioState.packetCounter + column * 13;
+          height = column == 0 || column == 15 ? phase % 4 : 2 + phase % 3;
+        } else {
+          height = min(height, caps[column]);
+        }
+      }
+    }
+    int first = 8 - height;
+    int end = 8 + height;
+    if (mode == 1 && height == 0) {
+      first = 7;
+      end = 9;
+    } else if (mode == 2) {
+      first = min((int)heartTop[column] + 2, max(0, heartTop[column] + 2 - height));
+      end = min(16, max(first + 1, heartBottom[column] + height - 1));
+    } else if (mode == 3) {
+      first = min(first, 7);
+      end = max(end, 9);
+    } else if (mode == 4) {
+      first = 0;
+      end = 16;
+    }
+    for (int row = first; row < end; ++row) {
+      if (mode == 4 && row >= height && row < 16 - height) continue;
+      const uint8_t colorIndex = mode == 1 ? row : column;
+      const uint32_t rgb = palettes[mode][colorIndex];
+      const CRGB color(rgb >> 16, (rgb >> 8) & 255U, rgb & 255U);
+      int x = 5 + (52 * column + 7) / 15;
+      int y = 10 + (42 * row + 7) / 15;
+      if (mode == 3 || mode == 4) {
+        x = 10 + (42 * (mode == 3 ? row : column) + 7) / 15;
+        y = 5 + (52 * (mode == 3 ? column : row) + 7) / 15;
+      }
+      putPixel(x, y, color);
+      putPixel(x + 1, y, color);
+      putPixel(x, y + 1, color);
+      putPixel(x + 1, y + 1, color);
+    }
+  }
+}
+
+#endif
+
+void renderAudio() {
+  if (!audioState.valid) return;
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  if (audioState.fft) renderClockwiseSpectrum();
+  else renderClockwiseRhythm();
+#else
+  if (audioState.fft) {
+    // Preserve the original per-band response and motion for all five effects.
+    switch (audioState.mode) {
+      case 0: renderAudioFFT0(audioState.bands); break;
+      case 1: renderAudioFFT1(audioState.bands); break;
+      case 2: renderAudioRainbowHeartFFT(audioState.bands); break;
+      case 3: renderAudioHorizontalFromCenter(audioState.bands); break;
+      default: renderAudioFFT3(audioState.bands); break;
     }
   } else {
-    switch(audioState.mode) {
-      case 0: renderAudioFFT0(audioState.bands); break;              // FFT 1 validated
-      case 1: renderAudioFFT1(audioState.bands); break;              // FFT 2 row-coloured
-      case 2: renderAudioRainbowHeartFFT(audioState.bands); break;   // FFT 3 full-screen heart
-      case 3: renderAudioHorizontalFromCenter(audioState.bands); break; // FFT 4 validated
-      default: renderAudioFFT3(audioState.bands); break;             // FFT 5 validated
+    switch (audioState.mode) {
+      case 0: renderAudioBreakdancer(audioState.level); break;
+      case 1: renderAudioHeartLevel(audioState.level); break;
+      case 2: renderAudioFakeSpectrum(audioState.level); break;
+      case 3: renderAudioPurpleFace(audioState.level); break;
+      default: renderAudioObservedFace(audioState.level); break;
     }
   }
   scaleLegacy16CanvasToLogical();
+#endif
   refreshMatrix();
+}
+
+static void acceptAudioFrame() {
+  audioState.lastPacketMs = millis();
+  ++audioState.packetCounter;
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  if (displayMode != DISPLAY_AUDIO) switchDisplayMode(DISPLAY_AUDIO);
+  // Coalesce incoming samples. HUB75 updates run in loop(), so an ATT write
+  // can be acknowledged without waiting for a complete panel redraw.
+  audioFramePending = true;
+#else
+  switchDisplayMode(DISPLAY_AUDIO);
+  renderAudio();
+#endif
+}
+
+// iOS uses the actual 21-byte packet length (0x15). The legacy stream
+// uses 0x21 for the same payload format.
+static size_t audioFrameSizeFromHeader(const uint8_t *data, size_t len) {
+  if (!data || len < 4 || data[1] != 0 || data[3] != 0x02) return 0;
+  if (data[0] == AUDIO_LEVEL_FRAME_SIZE && data[2] == 0) return AUDIO_LEVEL_FRAME_SIZE;
+  if ((data[0] == AUDIO_FFT_FRAME_SIZE || data[0] == 0x21) && data[2] == 1) {
+    return AUDIO_FFT_FRAME_SIZE;
+  }
+  return 0;
 }
 
 bool processAudioPacket(const uint8_t *data, size_t len) {
@@ -7006,14 +7169,17 @@ bool processAudioPacket(const uint8_t *data, size_t len) {
   if (len == 6 && data[0] == 0x06 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0x02) {
     uint8_t rawMode=data[5];
     if(rawMode<1 || rawMode>5) return false;
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+    if (displayMode != DISPLAY_AUDIO || audioState.fft || audioState.mode != rawMode - 1) {
+      clockwiseRhythmPlayback.mode = 0xff;
+      audioEffectChanged = true;
+    }
+#endif
     audioState.valid=true;
     audioState.fft=false;
     audioState.mode=rawMode-1;
     audioState.level=(uint8_t)min(12,(int)data[4]);
-    audioState.lastPacketMs=millis();
-    audioState.packetCounter++;
-    switchDisplayMode(DISPLAY_AUDIO);
-    renderAudio();
+    acceptAudioFrame();
 #if DEBUG_SERIAL
     int uiEffect=audioProtocolIndex(false, audioState.mode);
     if(uiEffect!=audioLastUiEffect || millis()-audioLastLogMs>=1000) {
@@ -7028,25 +7194,30 @@ bool processAudioPacket(const uint8_t *data, size_t len) {
   }
 
   // FFT family. A complete wire frame is exactly 21 bytes:
-  //   21 00 01 02 <mode> <16 GEQ bands>
+  //   15/21 00 01 02 <mode> <16 GEQ bands>
   // The legacy iDotMatrix visualizers consume 8 logical bands, produced by
   // averaging adjacent wire-band pairs. The transport layer below guarantees
   // that only one complete 21-byte frame reaches this function.
-  if (len == AUDIO_FFT_FRAME_SIZE && data[0] == 0x21 && data[1] == 0x00 && data[2] == 0x01 && data[3] == 0x02) {
+  if (len == AUDIO_FFT_FRAME_SIZE && audioFrameSizeFromHeader(data, len) == len) {
     uint8_t mode=data[4];
     if(mode>4) return false;
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+    if (displayMode != DISPLAY_AUDIO || !audioState.fft || audioState.mode != mode) {
+      audioEffectChanged = true;
+    }
+#endif
     audioState.valid=true;
     audioState.fft=true;
     audioState.mode=mode;
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+    memcpy(audioState.wireBands, data + 5, sizeof(audioState.wireBands));
+#endif
     for(uint8_t i=0;i<8;i++) {
       const uint16_t a=data[5U+(uint16_t)i*2U];
       const uint16_t b=data[6U+(uint16_t)i*2U];
       audioState.bands[i]=(uint8_t)min(12U,(unsigned)((a+b+1U)/2U));
     }
-    audioState.lastPacketMs=millis();
-    audioState.packetCounter++;
-    switchDisplayMode(DISPLAY_AUDIO);
-    renderAudio();
+    acceptAudioFrame();
 #if DEBUG_SERIAL
     int uiEffect=audioProtocolIndex(true, mode);
     if(uiEffect!=audioLastUiEffect || millis()-audioLastLogMs>=1000) {
@@ -7285,16 +7456,7 @@ void processFA02Packet(const uint8_t *data,size_t len){
 // ======================================================
 
 static bool startsAudioFrame(const uint8_t *data, size_t len) {
-  if(!data || len<4) return false;
-  return (data[0]==0x06 && data[1]==0x00 && data[2]==0x00 && data[3]==0x02) ||
-         (data[0]==0x21 && data[1]==0x00 && data[2]==0x01 && data[3]==0x02);
-}
-
-static size_t audioFrameSizeFromHeader(const uint8_t *data, size_t len) {
-  if(!data || len<4) return 0;
-  if(data[0]==0x06 && data[1]==0x00 && data[2]==0x00 && data[3]==0x02) return AUDIO_LEVEL_FRAME_SIZE;
-  if(data[0]==0x21 && data[1]==0x00 && data[2]==0x01 && data[3]==0x02) return AUDIO_FFT_FRAME_SIZE;
-  return 0;
+  return audioFrameSizeFromHeader(data, len) != 0;
 }
 
 // Mirrors the WLED framing guard: when an Audio/Rhythm frame is incomplete,
@@ -9442,7 +9604,26 @@ void loop(){
   if(carouselTransferIndicatorActive) renderCarouselTransferIndicator(now);
 
   if(!carouselTransferIndicatorActive && displayMode==DISPLAY_EFFECT) updateEffect();
+#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
+  if (!carouselTransferIndicatorActive && displayMode == DISPLAY_AUDIO && audioFramePending) {
+    static uint32_t lastAudioRender = 0;
+    if (audioEffectChanged || now - lastAudioRender >= 33) {
+      const bool switched = audioEffectChanged;
+      lastAudioRender = now;
+      audioFramePending = false;
+      audioEffectChanged = false;
+      renderAudio();
+#if DEBUG_SERIAL
+      if (switched) {
+        Serial.printf("AUDIO DRAW fx=%u elapsedMs=%lu\n", audioProtocolIndex(audioState.fft, audioState.mode),
+                      (unsigned long)(millis() - audioState.lastPacketMs));
+      }
+#endif
+    }
+  }
+#else
   if(!carouselTransferIndicatorActive && displayMode==DISPLAY_AUDIO){ static uint32_t lastAudioRender=0; if(now-lastAudioRender>=80){ lastAudioRender=now; renderAudio(); } }
+#endif
   updateCarousel(now);
   updatePreset(now);
   if(!carouselTransferIndicatorActive && displayMode==DISPLAY_GIF) updateGIF();
