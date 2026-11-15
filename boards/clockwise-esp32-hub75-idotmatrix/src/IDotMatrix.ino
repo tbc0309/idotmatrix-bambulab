@@ -11,9 +11,6 @@
 #include "IDotMatrixAudioOutput.h"
 #include "IDotMatrixOta.h"
 #include "IDotMatrixMemoryTelemetry.h"
-#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
-  #include "ClockwiseWifiClock.h"
-#endif
 #if IDOTMATRIX_BUZZER_TYPE == IDOTMATRIX_BUZZER_PASSIVE
   #include <esp32-hal-ledc.h>
 #endif
@@ -479,9 +476,6 @@ uint8_t brightnessPercent = 100;
 // CLOCK / DATE
 // ======================================================
 bool clockSynced = false;
-#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
-static bool wifiClockSynced = false;
-#endif
 uint16_t syncYear = 2026;
 uint8_t syncMonth = 1, syncDay = 1;
 uint8_t syncHour = 0, syncMinute = 0, syncSecond = 0;
@@ -7379,12 +7373,7 @@ void processFA02Packet(const uint8_t *data,size_t len){
     uint16_t y=2000+data[4];
     uint8_t mo=data[5], d=data[6], h=data[8], mi=data[9], se=data[10];
     if(isValidDateTime(y,mo,d,h,mi,se)){
-#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
-      if (!wifiClockSynced)
-#endif
-      {
-        syncYear=y; syncMonth=mo; syncDay=d; syncHour=h; syncMinute=mi; syncSecond=se; syncMillis=monotonicMillis64(); clockSynced=true;
-      }
+      syncYear=y; syncMonth=mo; syncDay=d; syncHour=h; syncMinute=mi; syncSecond=se; syncMillis=monotonicMillis64(); clockSynced=true;
 #if IDOTMATRIX_RTC_AVAILABLE && IDOTMATRIX_RTC_SYNC_FROM_BLE
       if(!rtcReady) rtcRetryNextAt=millis();
       if(rtcReady){
@@ -9010,7 +8999,7 @@ void applyBootDisplayPolicy() {
   displayMode=DISPLAY_CLOCK;
   clockCycleStartedAt=millis();
   renderClock();
-  Serial.println("BOOT POLICY: CLOCK (Wi-Fi or App time sync)");
+  Serial.println("BOOT POLICY: CLOCK (App time sync)");
 #else
   int8_t slot=nextCarouselSlot(-1);
   if (slot>=0) {
@@ -9557,19 +9546,6 @@ void setup(){
   if (esp_read_mac(mac, ESP_MAC_BT) == ESP_OK)
     snprintf(DEVICE_NAME, sizeof(DEVICE_NAME), "IDM_64*64_%02X%02X", mac[4], mac[5]);
   Serial.printf("APP advertising %s screenType=%u\n", DEVICE_NAME, IDOTMATRIX_SCREEN_TYPE);
-  clockwiseWifi::begin(DEVICE_NAME, []() {
-    if (!lockRuntimeState()) return true;
-    const bool enabled = clock24h;
-    unlockRuntimeState();
-    return enabled;
-  }, [](bool enabled) {
-    if (!lockRuntimeState()) return;
-    clock24h = enabled;
-    scheduleClockPreferencesSave();
-    if (displayMode == DISPLAY_CLOCK) renderClock();
-    unlockRuntimeState();
-  });
-
 #endif
 
 
@@ -9743,10 +9719,6 @@ static void updateClockwiseBootButton(uint32_t now) {
   }
   const uint32_t heldMs = changedAt - pressedAt;
   if (heldMs >= factoryResetHoldMs) {
-    if (!clockwiseWifi::clearSettings()) {
-      Serial.println("BOOT: could not clear Wi-Fi settings");
-      return;
-    }
     resetRuntimeState();
     if (displayPin == noDisplayPin) {
       Serial.println("BOOT: factory reset complete");
@@ -9791,21 +9763,6 @@ void loop(){
     free(textState.bitmap);
     textState.bitmap = nullptr;
     textState.valid = false;
-  }
-  static uint32_t wifiClockCheckedAt = 0;
-  if (now - wifiClockCheckedAt >= 250) {
-    wifiClockCheckedAt = now;
-    std::tm local{};
-    if (clockwiseWifi::localTime(local)) {
-      syncYear = local.tm_year + 1900;
-      syncMonth = local.tm_mon + 1;
-      syncDay = local.tm_mday;
-      syncHour = local.tm_hour;
-      syncMinute = local.tm_min;
-      syncSecond = local.tm_sec;
-      syncMillis = monotonicMillis64();
-      clockSynced = wifiClockSynced = true;
-    }
   }
 #endif
   // 06/02 may publish a complete Preset candidate bank and start its
@@ -10002,8 +9959,5 @@ void loop(){
     BLEDevice::startAdvertising();
 #endif
   }
-#if defined(IDOTMATRIX_BOARD_CLOCKWISE)
-  clockwiseWifi::loop();
-#endif
   delay(5);
 }
