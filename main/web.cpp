@@ -12,6 +12,7 @@
 #include <esp_heap_caps.h>
 #include <esp_random.h>
 #include <esp_timer.h>
+#include <esp_log.h>
 #include <memory>
 #include <vector>
 #include <algorithm>
@@ -25,14 +26,6 @@ uint32_t loginAt=0;unsigned attempts=0;
 extern const uint8_t htmlStart[] asm("_binary_index_html_gz_start");extern const uint8_t htmlEnd[] asm("_binary_index_html_gz_end");
 extern const uint8_t appStart[] asm("_binary_app_js_gz_start");extern const uint8_t appEnd[] asm("_binary_app_js_gz_end");
 extern const uint8_t cssStart[] asm("_binary_style_css_gz_start");extern const uint8_t cssEnd[] asm("_binary_style_css_gz_end");
-extern const uint8_t artStart[] asm("_binary_pixel_art_js_gz_start");extern const uint8_t artEnd[] asm("_binary_pixel_art_js_gz_end");
-extern const uint8_t localesStart[] asm("_binary_locales_js_gz_start");extern const uint8_t localesEnd[] asm("_binary_locales_js_gz_end");
-extern const uint8_t i18nStart[] asm("_binary_i18n_js_gz_start");extern const uint8_t i18nEnd[] asm("_binary_i18n_js_gz_end");
-extern const uint8_t formsStart[] asm("_binary_forms_js_gz_start");extern const uint8_t formsEnd[] asm("_binary_forms_js_gz_end");
-extern const uint8_t zonesStart[] asm("_binary_timezones_js_gz_start");extern const uint8_t zonesEnd[] asm("_binary_timezones_js_gz_end");
-extern const uint8_t pickerStart[] asm("_binary_timezone_picker_js_gz_start");extern const uint8_t pickerEnd[] asm("_binary_timezone_picker_js_gz_end");
-extern const uint8_t managerStart[] asm("_binary_printer_manager_js_gz_start");extern const uint8_t managerEnd[] asm("_binary_printer_manager_js_gz_end");
-extern const uint8_t updatesStart[] asm("_binary_online_update_js_gz_start");extern const uint8_t updatesEnd[] asm("_binary_online_update_js_gz_end");
 uint32_t now(){return uint32_t(esp_timer_get_time()/1000);}
 esp_err_t send(httpd_req_t *r,JsonDocument &doc){std::string text;serializeJson(doc,text);httpd_resp_set_type(r,"application/json; charset=utf-8");httpd_resp_set_hdr(r,"Cache-Control","no-store");httpd_resp_set_hdr(r,"X-Content-Type-Options","nosniff");return httpd_resp_send(r,text.data(),text.size());}
 esp_err_t error(httpd_req_t *r,int status,const char *message){httpd_resp_set_status(r,status==401?"401 Unauthorized":status==403?"403 Forbidden":status==409?"409 Conflict":status==413?"413 Payload Too Large":status==429?"429 Too Many Requests":status==503?"503 Service Unavailable":"400 Bad Request");StaticJsonDocument<256> d;d["error"]=message;return send(r,d);}
@@ -44,12 +37,11 @@ bool authorized(httpd_req_t *r){
 }
 bool body(httpd_req_t *r,JsonDocument &doc,size_t limit=196608){if(r->content_len<=0||size_t(r->content_len)>limit)return false;std::string text;text.resize(r->content_len);size_t at=0;while(at<text.size()){int n=httpd_req_recv(r,text.data()+at,text.size()-at);if(n<=0)return false;at+=n;}return deserializeJson(doc,text)==DeserializationError::Ok;}
 void rebootTask(void*){vTaskDelay(pdMS_TO_TICKS(1500));esp_restart();}
-esp_err_t page(httpd_req_t *r){const uint8_t *a=htmlStart,*b=htmlEnd;const char *type="text/html; charset=utf-8";if(!strcmp(r->uri,"/app.js")){a=appStart;b=appEnd;type="text/javascript";}if(!strcmp(r->uri,"/pixel-art.js")){a=artStart;b=artEnd;type="text/javascript";}if(!strcmp(r->uri,"/style.css")){a=cssStart;b=cssEnd;type="text/css";}
- if(!strcmp(r->uri,"/online-update.js")){a=updatesStart;b=updatesEnd;type="text/javascript";}
- if(!strcmp(r->uri,"/locales.js")){a=localesStart;b=localesEnd;type="text/javascript";}if(!strcmp(r->uri,"/i18n.js")){a=i18nStart;b=i18nEnd;type="text/javascript";}
- if(!strcmp(r->uri,"/forms.js")){a=formsStart;b=formsEnd;type="text/javascript";}
- if(!strcmp(r->uri,"/timezones.js")){a=zonesStart;b=zonesEnd;type="text/javascript";}if(!strcmp(r->uri,"/timezone-picker.js")){a=pickerStart;b=pickerEnd;type="text/javascript";}
- if(!strcmp(r->uri,"/printer-manager.js")){a=managerStart;b=managerEnd;type="text/javascript";}
+esp_err_t page(httpd_req_t *r){
+ const uint8_t *a=htmlStart,*b=htmlEnd;
+ const char *type="text/html; charset=utf-8";
+ if(!strcmp(r->uri,"/app.js")){a=appStart;b=appEnd;type="text/javascript";}
+ else if(!strcmp(r->uri,"/style.css")){a=cssStart;b=cssEnd;type="text/css";}
  httpd_resp_set_type(r,type);httpd_resp_set_hdr(r,"Content-Encoding","gzip");httpd_resp_set_hdr(r,"Cache-Control","no-cache");httpd_resp_set_hdr(r,"X-Frame-Options","DENY");httpd_resp_set_hdr(r,"X-Content-Type-Options","nosniff");httpd_resp_set_hdr(r,"Content-Security-Policy","default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'");return httpd_resp_send(r,reinterpret_cast<const char*>(a),b-a);
 }
 esp_err_t get(httpd_req_t *r){
@@ -135,25 +127,45 @@ esp_err_t portalRedirect(httpd_req_t *request,httpd_err_code_t){
  httpd_resp_set_hdr(request,"Cache-Control","no-store");
  return httpd_resp_sendstr(request,"Open Wi-Fi setup");
 }
-void webBegin(){httpd_config_t c=HTTPD_DEFAULT_CONFIG();c.max_uri_handlers=48;c.stack_size=memory::httpStack;
+template<esp_err_t (*Handler)(httpd_req_t *)>
+esp_err_t tracePortal(httpd_req_t *request){
+#ifdef MATRIX_BOARD_HUB75
+ if(provisioningRequest(httpd_req_to_sockfd(request))){
+  const auto started=esp_timer_get_time();
+  const int fd=httpd_req_to_sockfd(request);
+  const char *method=request->method==HTTP_GET?"GET":"POST";
+  const int pathLength=strcspn(request->uri,"?");
+  ESP_LOGI("portal-http","fd=%d start %s %.*s",fd,method,pathLength,request->uri);
+  const esp_err_t result=Handler(request);
+  ESP_LOGI("portal-http","fd=%d done %.*s elapsed=%lld ms result=%s",
+           fd,pathLength,request->uri,(long long)((esp_timer_get_time()-started)/1000),esp_err_to_name(result));
+  return result;
+ }
+#endif
+ return Handler(request);
+}
+static esp_err_t redirectProbe(httpd_req_t *request){
+ return portalRedirect(request,HTTPD_404_NOT_FOUND);
+}
+void webBegin(){httpd_config_t c=HTTPD_DEFAULT_CONFIG();c.max_uri_handlers=40;c.stack_size=memory::httpStack;
  c.lru_purge_enable=true;c.recv_wait_timeout=15;c.send_wait_timeout=15;ESP_ERROR_CHECK(httpd_start(&server,&c));
  ESP_ERROR_CHECK(httpd_register_err_handler(server,HTTPD_404_NOT_FOUND,portalRedirect));
  for(const char *path:{"/hotspot-detect.html","/library/test/success.html","/generate_204","/gen_204","/connecttest.txt","/ncsi.txt"}){
   httpd_uri_t probe{};probe.uri=path;probe.method=HTTP_GET;
-  probe.handler=[](httpd_req_t *r){return portalRedirect(r,HTTPD_404_NOT_FOUND);};
+  probe.handler=tracePortal<redirectProbe>;
   ESP_ERROR_CHECK(httpd_register_uri_handler(server,&probe));
  }
 
- for(const char *path:{"/","/printer-manager.js","/app.js","/style.css","/pixel-art.js","/locales.js","/i18n.js","/forms.js","/timezones.js","/timezone-picker.js","/online-update.js"}){httpd_uri_t u{};u.uri=path;u.method=HTTP_GET;u.handler=page;ESP_ERROR_CHECK(httpd_register_uri_handler(server,&u));}
+ for(const char *path:{"/","/app.js","/style.css"}){httpd_uri_t u{};u.uri=path;u.method=HTTP_GET;u.handler=tracePortal<page>;ESP_ERROR_CHECK(httpd_register_uri_handler(server,&u));}
  for(const char *path:{"/api/health","/api/config","/api/backup","/api/status","/api/wifi/scan",
 #ifndef MATRIX_BOARD_HUB75
  "/api/pixel/scan",
 #endif
- "/api/cloud","/api/printer/validate","/api/provision"}){httpd_uri_t u{};u.uri=path;u.method=HTTP_GET;u.handler=get;ESP_ERROR_CHECK(httpd_register_uri_handler(server,&u));}
+ "/api/cloud","/api/printer/validate","/api/provision"}){httpd_uri_t u{};u.uri=path;u.method=HTTP_GET;u.handler=tracePortal<get>;ESP_ERROR_CHECK(httpd_register_uri_handler(server,&u));}
  for(const char *path:{"/api/login","/api/logout","/api/config","/api/restore","/api/password","/api/wifi/scan",
 #ifndef MATRIX_BOARD_HUB75
  "/api/pixel/scan",
 #endif
- "/api/cloud","/api/cloud/clear","/api/firmware","/api/setup","/api/restart","/api/printer/validate","/api/update/check","/api/update/install","/api/provision","/api/preferences"}){httpd_uri_t u{};u.uri=path;u.method=HTTP_POST;u.handler=post;ESP_ERROR_CHECK(httpd_register_uri_handler(server,&u));}
+ "/api/cloud","/api/cloud/clear","/api/firmware","/api/setup","/api/restart","/api/printer/validate","/api/update/check","/api/update/install","/api/provision","/api/preferences"}){httpd_uri_t u{};u.uri=path;u.method=HTTP_POST;u.handler=tracePortal<post>;ESP_ERROR_CHECK(httpd_register_uri_handler(server,&u));}
 }
 }

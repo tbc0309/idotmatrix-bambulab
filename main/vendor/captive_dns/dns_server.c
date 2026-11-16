@@ -253,10 +253,21 @@ void dns_server_task(void *pvParameters)
                 if (reply_len <= 0) {
                     ESP_LOGE(TAG, "Failed to prepare a DNS reply");
                 } else {
-                    int err = sendto(sock, reply, reply_len, 0, (struct sockaddr *)&source_addr, sizeof(source_addr));
+                    int err;
+                    int send_errno;
+                    bool transient;
+                    for (int attempt = 0; ; ++attempt) {
+                        err = sendto(sock, reply, reply_len, 0,
+                                     (struct sockaddr *)&source_addr, socklen);
+                        send_errno = errno;
+                        transient = send_errno == ENOMEM || send_errno == ENOBUFS ||
+                                    send_errno == EAGAIN || send_errno == EWOULDBLOCK;
+                        if (err >= 0 || !transient || attempt == 3) break;
+                        vTaskDelay(pdMS_TO_TICKS(25));
+                    }
                     if (err < 0) {
-                        ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
-                        break;
+                        ESP_LOGW(TAG, "DNS reply could not be sent: errno %d", send_errno);
+                        if (!transient) break;
                     }
                 }
             }

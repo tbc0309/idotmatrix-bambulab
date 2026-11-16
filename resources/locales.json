@@ -2138,5 +2138,15 @@
     "Поворот на 90°",
     "90°回転",
     "90° 회전"
+  ],
+  "Firmware does not match this board. Select a new image for this model.": [
+    "固件与当前主板不匹配，请选择对应机型的新版固件。",
+    "韌體與目前主機板不符，請選擇對應機型的新版韌體。",
+    "Firmware does not match this board. Select a new image for this model.",
+    "Le micrologiciel ne correspond pas à cette carte. Sélectionnez une nouvelle image pour ce modèle.",
+    "Die Firmware passt nicht zu diesem Board. Wählen Sie eine neue Datei für dieses Modell.",
+    "Прошивка не соответствует этой плате. Выберите новый образ для этой модели.",
+    "ファームウェアがこのボードに対応していません。この機種用の新しいファイルを選択してください。",
+    "펌웨어가 이 보드와 일치하지 않습니다. 이 모델에 맞는 새 파일을 선택하세요."
   ]
 }

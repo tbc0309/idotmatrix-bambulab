@@ -717,6 +717,11 @@ public:
     dma_bus.dma_transfer_stop();
   }
 
+  void resumeDMAoutput()
+  {
+    dma_bus.dma_transfer_start();
+  }
+
   // ------- PROTECTED -------
   // those might be useful for child classes, like VirtualMatrixPanel
 protected:

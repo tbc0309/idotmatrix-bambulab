@@ -1,7 +1,7 @@
 set(PIXEL "ported/features/pixel_screen")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/../web/online-update.js" "${CMAKE_CURRENT_LIST_DIR}/../resources/pixel-layout.json" "${CMAKE_CURRENT_LIST_DIR}/../scripts/generate_pixel_layout.py" "${CMAKE_CURRENT_LIST_DIR}/../boards/catalog.json")
 set(WEB_ASSETS "${CMAKE_BINARY_DIR}/web-assets")
-set(ASSETS printer-manager_js index_html app_js style_css pixel-art_js locales_js i18n_js forms_js timezones_js timezone-picker_js online-update_js)
+set(ASSETS index_html app_js style_css)
 list(TRANSFORM ASSETS PREPEND "${WEB_ASSETS}/")
 list(TRANSFORM ASSETS APPEND ".gz")
 if(NOT MATRIX_BOARD STREQUAL "clockwise-esp32-hub75")
@@ -20,6 +20,7 @@ idf_component_register(SRCS
  nvs_flash ${BLE_COMPONENT} mqtt mbedtls esp_timer esp_driver_gpio esp_driver_ledc esp_driver_uart esp_hw_support
  PRIV_REQUIRES esp_driver_i2c esp_driver_rmt
  EMBED_FILES ${ASSETS})
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-u idotmatrix_app_board")
 target_compile_features(${COMPONENT_LIB} PRIVATE cxx_std_17)
 target_compile_options(${COMPONENT_LIB} PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-include${CMAKE_CURRENT_LIST_DIR}/ported/platform/idf/json.h>" -Wno-error=use-after-free -Wno-error=misleading-indentation)
 
@@ -32,8 +33,16 @@ if(MATRIX_BOARD STREQUAL "esp32c3-rgb24")
 endif()
 
 if(MATRIX_BOARD STREQUAL "clockwise-esp32-hub75")
+    option(CLOCKWISE_SCALE_LAYOUT "Use the 32x32 printer layout at 2x scale" ON)
+    if(CLOCKWISE_SCALE_LAYOUT)
+        set_source_files_properties("${MATRIX_BOARD_DIR}/board.cpp"
+            PROPERTIES COMPILE_DEFINITIONS CLOCKWISE_SCALE_LAYOUT)
+    else()
+        target_sources(${COMPONENT_LIB} PRIVATE "${MATRIX_BOARD_DIR}/layouts/native64/native_renderer.cpp")
+    endif()
     set(HUB75_DRIVER "${MATRIX_BOARD_DIR}/vendor/src")
     target_sources(${COMPONENT_LIB} PRIVATE
+        "${HUB75_DRIVER}/../qrcode/qrcodegen.c"
         "${HUB75_DRIVER}/ESP32-HUB75-MatrixPanel-I2S-DMA.cpp"
         "${HUB75_DRIVER}/ESP32-HUB75-MatrixPanel-leddrivers.cpp"
         "${HUB75_DRIVER}/platforms/esp32/esp32_i2s_parallel_dma.cpp")

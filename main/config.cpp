@@ -154,7 +154,9 @@ bool provisionWifi(JsonVariantConst input,std::string &error){
  if(!input.is<JsonObjectConst>()||!input["ssid"].is<const char*>()||!strlen(input["ssid"]|"")||!input["password"].is<const char*>())return error="invalid_wifi",false;
  std::lock_guard<std::recursive_mutex> lock(guard);DynamicJsonDocument next(configLimit);next.set(config);
  auto wifi=next["wifi"].as<JsonObject>();wifi["ssid"]=input["ssid"];wifi["password"]=input["password"];wifi["passwordEncrypted"]=true;
- return configSave(next,error);
+ if(!configSave(next,error))return false;
+ resumeProvisioningConnection();
+ return true;
 }
 bool configReset(bool all){
  std::lock_guard<std::recursive_mutex> lock(guard);

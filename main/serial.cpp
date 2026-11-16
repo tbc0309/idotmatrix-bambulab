@@ -4,6 +4,9 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 namespace bridge {
+#ifdef MATRIX_BOARD_HUB75
+void setupTestMode();
+#endif
 namespace {
 void worker(void*){
  std::string line;line.reserve(512);bool overflow=false;
@@ -12,7 +15,14 @@ void worker(void*){
   if(!overflow&&line.rfind("wifi ",0)==0){DynamicJsonDocument input(1024);if(!deserializeJson(input,line.c_str()+5)&&input["ssid"].is<const char*>()&&input["password"].is<const char*>()){
     DynamicJsonDocument candidate(configLimit);configCopy(candidate);candidate["wifi"]=input;std::string error;bool okay=configSave(candidate.as<JsonVariantConst>(),error);ESP_LOGI("serial","Wi-Fi settings %s",okay?"saved":error.c_str());
    }else ESP_LOGW("serial","Invalid Wi-Fi command");
-  }else if(!overflow&&line=="status"){DynamicJsonDocument d(8192);networkStatus(d.createNestedObject("network"));{std::lock_guard<std::recursive_mutex> lock(guard);d["configCapacity"]=config.capacity();d["configUsage"]=config.memoryUsage();d["revision"]=revision.load();d["ssidLength"]=strlen(config["wifi"]["ssid"]|"");}std::string t;serializeJson(d,t);ESP_LOGI("serial","%s",t.c_str());}else if(!overflow&&line=="setup"){setupMode(true);ESP_LOGI("serial","Setup hotspot enabled");}
+  }else if(!overflow&&line=="status"){DynamicJsonDocument d(8192);networkStatus(d.createNestedObject("network"));{std::lock_guard<std::recursive_mutex> lock(guard);d["configCapacity"]=config.capacity();d["configUsage"]=config.memoryUsage();d["revision"]=revision.load();d["ssidLength"]=strlen(config["wifi"]["ssid"]|"");}std::string t;serializeJson(d,t);ESP_LOGI("serial","%s",t.c_str());}else if(!overflow&&line=="setup"){
+#ifdef MATRIX_BOARD_HUB75
+   setupTestMode();
+#else
+   setupMode(true);
+#endif
+   ESP_LOGI("serial","Setup hotspot enabled");
+  }
   std::fill(line.begin(),line.end(),0);line.clear();overflow=false;
  }
 }

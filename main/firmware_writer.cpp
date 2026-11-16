@@ -1,9 +1,22 @@
 #include "firmware_writer.h"
-#include "update_policy.h"
 #include "board.h"
 #include <algorithm>
 
 namespace bridge {
+namespace {
+constexpr auto makeBoardDescriptor() {
+    std::array<char, update_policy::boardDescriptorSize> descriptor{};
+    constexpr size_t magicSize = sizeof(update_policy::boardMagic) - 1;
+    static_assert(std::char_traits<char>::length(board::id) < update_policy::boardIdSize);
+    for (size_t i = 0; i < magicSize; ++i) descriptor[i] = update_policy::boardMagic[i];
+    for (size_t i = 0; board::id[i]; ++i) descriptor[magicSize + i] = board::id[i];
+    return descriptor;
+}
+}
+
+extern "C" const __attribute__((section(".rodata_custom_desc"), aligned(4)))
+    std::array<char, update_policy::boardDescriptorSize> idotmatrix_app_board = makeBoardDescriptor();
+
 std::atomic<bool> FirmwareWriter::busy_{false};
 FirmwareWriter::FirmwareWriter(size_t size,std::string checksum,std::string version):total_(size),checksum_(std::move(checksum)),version_(std::move(version)){
     owned_=!busy_.exchange(true);
@@ -28,6 +41,7 @@ bool FirmwareWriter::write(const uint8_t *data,size_t size){
         std::copy_n(data,copied,header_.data()+headerSize_);headerSize_+=copied;data+=copied;size-=copied;
         if(headerSize_<header_.size())return true;
         if(!update_policy::header(header_.data(),header_.size(),board::chipId,board::projectName,version_.c_str()))return fail("wrong_project_image");
+        if(!update_policy::matchesBoard(header_.data(),header_.size(),board::id))return fail("wrong_board_image");
         if(esp_ota_begin(partition_,total_,&handle_)!=ESP_OK)return fail("ota_busy");
         started_=true;
         if(esp_ota_write(handle_,header_.data(),header_.size())!=ESP_OK)return fail("flash_write_failed");

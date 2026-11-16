@@ -33,6 +33,20 @@ inline bool redirect(const std::string &url){
 inline bool field(const uint8_t *value,const char *expected){
     size_t length=strlen(expected);return length<32&&!memcmp(value,expected,length)&&value[length]==0;
 }
+// ESP-IDF places the custom application descriptor immediately after esp_app_desc_t.
+inline constexpr size_t boardOffset = 288;
+inline constexpr char boardMagic[] = "IDMBOARD";
+inline constexpr size_t boardIdSize = 32;
+inline constexpr size_t boardDescriptorSize = sizeof(boardMagic) - 1 + boardIdSize;
+inline constexpr size_t imageHeaderSize = boardOffset + boardDescriptorSize;
+
+inline bool matchesBoard(const uint8_t *data, size_t size, const char *expected) {
+    if (size < imageHeaderSize) return false;
+    const uint8_t *descriptor = data + boardOffset;
+    return memcmp(descriptor, boardMagic, sizeof(boardMagic) - 1) == 0 &&
+           field(descriptor + sizeof(boardMagic) - 1, expected);
+}
+
 inline bool header(const uint8_t *data,size_t size,unsigned chip,const char *project,const char *expectedVersion=""){
     return size>=288&&data[0]==0xe9&&(unsigned(data[12])|(unsigned(data[13])<<8))==chip&&
         data[32]==0x32&&data[33]==0x54&&data[34]==0xcd&&data[35]==0xab&&

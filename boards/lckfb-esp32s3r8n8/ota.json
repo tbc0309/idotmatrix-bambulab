@@ -8,6 +8,6 @@
   "flashBytes": 8388608,
   "appSlotBytes": 3604480,
   "url": "https://github.com/tbc0309/idotmatrix-bambulab/releases/download/1.0.2/lckfb-esp32s3r8n8.bin",
-  "size": 1569264,
-  "sha256": "534b83e656a006819fc7a29530dd02566fd5310b579ed4a71974c189320f50c5"
+  "size": 1543440,
+  "sha256": "d9ac2c4c24ea2056e689e83060330753bfe3ca704a51b649a83d86ae5e0b70fb"
 }

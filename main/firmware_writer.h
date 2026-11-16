@@ -1,4 +1,5 @@
 #pragma once
+#include "update_policy.h"
 #include <array>
 #include <atomic>
 #include <string>
@@ -24,7 +25,7 @@ private:
     const esp_partition_t *partition_=nullptr;
     esp_ota_handle_t handle_=0;
     size_t total_=0,received_=0,headerSize_=0;
-    std::array<uint8_t,288> header_{};
+    std::array<uint8_t,update_policy::imageHeaderSize> header_{};
     psa_hash_operation_t hash_=PSA_HASH_OPERATION_INIT;
     std::string checksum_,version_;
     const char *error_="";

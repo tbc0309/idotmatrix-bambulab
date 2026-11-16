@@ -7,6 +7,7 @@
 #include <esp_log.h>
 #include <esp_mac.h>
 #include <esp_timer.h>
+#include <esp_heap_caps.h>
 #include <atomic>
 #include <vector>
 #include <lwip/sockets.h>
@@ -19,13 +20,21 @@ std::string configuredSsid,configuredPassword,address,phase="starting",lastError
 dns_server_handle_t portalDns=nullptr;
 bool ap=true,connecting=false,sntpStarted=false;unsigned attempts=0;
 std::atomic<bool> requestedScan{false},scanning{false},scanDone{false};
+const char *scanError="";
 uint32_t scanAt=0,connectAt=0,retryAt=0,closeAt=0,seenRevision=UINT32_MAX;
 DynamicJsonDocument scanResults(8192);
 uint32_t now(){return uint32_t(esp_timer_get_time()/1000);}
 void event(void*,esp_event_base_t base,int32_t id,void *data){
  std::lock_guard<std::recursive_mutex> lock(guard);
+#ifdef MATRIX_BOARD_HUB75
+ if(base==WIFI_EVENT&&id==WIFI_EVENT_AP_STACONNECTED)
+  ESP_LOGI("portal-test","AP client joined, free=%u min=%u largest=%u",
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),
+           (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),
+           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
+#endif
  if(base==WIFI_EVENT&&id==WIFI_EVENT_STA_DISCONNECTED){wifiOnline=false;connecting=false;lastError="disconnected";phase="retrying";closeAt=0;retryAt=now()+networkRetryDelay(attempts);}
- if(base==WIFI_EVENT&&id==WIFI_EVENT_SCAN_DONE){scanning=false;scanDone=true;}
+ if(base==WIFI_EVENT&&id==WIFI_EVENT_SCAN_DONE){scanDone=true;}
  if(base==IP_EVENT&&id==IP_EVENT_STA_GOT_IP){
   auto *e=static_cast<ip_event_got_ip_t*>(data);char text[20];snprintf(text,sizeof(text),IPSTR,IP2STR(&e->ip_info.ip));address=text;wifiOnline=true;connecting=false;attempts=0;phase="connected";lastError.clear();if(ap)closeAt=now()+10000;
   ESP_LOGI("network","Device address: http://%s/",text);
@@ -60,7 +69,29 @@ void portalDnsApply(){
   portalDns=start_dns_server(&dns);
  }else if(!ap&&portalDns){stop_dns_server(portalDns);portalDns=nullptr;}
 }
+static bool holdSetupForTest=false;
 void setupMode(bool enabled){std::lock_guard<std::recursive_mutex> lock(guard);if(ap==enabled)return;ap=enabled;closeAt=0;esp_wifi_set_mode(ap?WIFI_MODE_APSTA:WIFI_MODE_STA);}
+#ifdef MATRIX_BOARD_HUB75
+void setupTestMode(){
+ std::lock_guard<std::recursive_mutex> lock(guard);
+ holdSetupForTest=true;
+ setupMode(true);
+ esp_wifi_disconnect();
+ wifiOnline=false;
+ connecting=false;
+ phase="setup";
+ wifiScan();
+}
+#endif
+void resumeProvisioningConnection(){
+ std::lock_guard<std::recursive_mutex> lock(guard);
+ if(!holdSetupForTest)return;
+ holdSetupForTest=false;
+ attempts=0;
+ lastError.clear();
+ phase="connecting";
+ retryAt=now();
+}
 void networkApply(){
  std::lock_guard<std::recursive_mutex> lock(guard);auto w=config["wifi"].as<JsonVariantConst>();std::string ssid=w["ssid"]|"",password=secret(w,"password","wifi");seenRevision=revision.load();
  if(ssid==configuredSsid&&password==configuredPassword&&phase!="starting")return;
@@ -72,13 +103,19 @@ void networkApply(){
 }
 void networkBegin(){
  ESP_ERROR_CHECK(esp_netif_init());ESP_ERROR_CHECK(esp_event_loop_create_default());esp_netif_create_default_wifi_sta();esp_netif_create_default_wifi_ap();
- wifi_init_config_t init=WIFI_INIT_CONFIG_DEFAULT();ESP_ERROR_CHECK(esp_wifi_init(&init));ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+ wifi_init_config_t init=WIFI_INIT_CONFIG_DEFAULT();
+#ifdef MATRIX_BOARD_HUB75
+ init.static_rx_buf_num=6;
+ init.dynamic_rx_buf_num=12;
+ // Keep captive portal responses out of the transmit aggregation queue.
+ init.ampdu_tx_enable=0;
+ ESP_LOGI("portal-test","Wi-Fi RX buffers static=%d dynamic=%d",init.static_rx_buf_num,init.dynamic_rx_buf_num);
+#endif
+ ESP_ERROR_CHECK(esp_wifi_init(&init));ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
  ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT,ESP_EVENT_ANY_ID,event,nullptr));ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT,IP_EVENT_STA_GOT_IP,event,nullptr));
  wifi_config_t c{};uint8_t mac[6];esp_read_mac(mac,ESP_MAC_WIFI_SOFTAP);snprintf(reinterpret_cast<char*>(c.ap.ssid),sizeof(c.ap.ssid),"PrintPixel-%02X%02X%02X",mac[3],mac[4],mac[5]);hotspotSsid=reinterpret_cast<char*>(c.ap.ssid);c.ap.ssid_len=strlen(reinterpret_cast<char*>(c.ap.ssid));c.ap.channel=1;c.ap.max_connection=4;c.ap.authmode=WIFI_AUTH_OPEN;
-#ifndef MATRIX_BOARD_HUB75
- snprintf(reinterpret_cast<char*>(c.ap.password),sizeof(c.ap.password),"12345678");
+ snprintf(reinterpret_cast<char*>(c.ap.password),sizeof(c.ap.password),"%s",setupPassword);
  c.ap.authmode=WIFI_AUTH_WPA2_PSK;
-#endif
  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP,&c));auto *apIf=esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
  esp_netif_ip_info_t ip{};
  ESP_ERROR_CHECK(esp_netif_get_ip_info(apIf,&ip));
@@ -86,22 +123,42 @@ void networkBegin(){
  ESP_ERROR_CHECK(esp_netif_set_dns_info(apIf,ESP_NETIF_DNS_MAIN,&dns));
  uint8_t offerDns=2;
  ESP_ERROR_CHECK(esp_netif_dhcps_option(apIf,ESP_NETIF_OP_SET,ESP_NETIF_DOMAIN_NAME_SERVER,&offerDns,sizeof(offerDns)));
- ESP_ERROR_CHECK(esp_wifi_start());networkApply();
+ ESP_ERROR_CHECK(esp_wifi_start());
+ networkApply();
+#ifdef MATRIX_BOARD_HUB75
+ if(configuredSsid.empty())wifiScan();
+#endif
  ESP_LOGI("network","Setup hotspot %s; http://192.168.4.1/",c.ap.ssid);
 }
-bool wifiScan(){if(scanning||requestedScan)return false;requestedScan=true;return true;}
-void wifiScanStatus(JsonObject out){std::lock_guard<std::recursive_mutex> lock(guard);out["scanning"]=scanning.load()||requestedScan.load();out["networks"]=scanResults.as<JsonArrayConst>();}
+bool wifiScan(){std::lock_guard<std::recursive_mutex> lock(guard);if(scanning||requestedScan)return false;scanError="";requestedScan=true;return true;}
+void wifiScanStatus(JsonObject out){std::lock_guard<std::recursive_mutex> lock(guard);out["scanning"]=scanning.load()||requestedScan.load();out["networks"]=scanResults.as<JsonArrayConst>();out["error"]=scanError;}
 void networkStatus(JsonObject out){std::lock_guard<std::recursive_mutex> lock(guard);out["online"]=wifiOnline.load();out["ip"]=wifiOnline?address:"";out["setup"]=ap;out["phase"]=phase;out["error"]=lastError;out["attempts"]=attempts;out["ssid"]=configuredSsid;wifi_ap_record_t record{};if(wifiOnline&&esp_wifi_sta_get_ap_info(&record)==ESP_OK){lastRssi=record.rssi;out["rssi"]=record.rssi;}}
 void networkPoll(){
  std::lock_guard<std::recursive_mutex> lock(guard);portalDnsApply();uint32_t tick=now();if(seenRevision!=revision.load())networkApply();
  if(requestedScan.exchange(false)){
-  if(connecting){esp_wifi_disconnect();connecting=false;}scanResults.to<JsonArray>();auto e=esp_wifi_scan_start(nullptr,false);if(e==ESP_OK){scanning=true;scanAt=tick;}else lastError="scan_failed";
+  if(connecting){esp_wifi_disconnect();connecting=false;}
+  scanResults.to<JsonArray>();
+  wifi_scan_config_t *scanConfig=nullptr;
+#ifdef MATRIX_BOARD_HUB75
+  wifi_scan_config_t portalScan{};
+  if(ap){
+   portalScan.scan_type=WIFI_SCAN_TYPE_ACTIVE;
+   portalScan.scan_time.active.min=25;
+   portalScan.scan_time.active.max=45;
+   portalScan.home_chan_dwell_time=60;
+   scanConfig=&portalScan;
+  }
+#endif
+  auto e=esp_wifi_scan_start(scanConfig,false);if(e==ESP_OK){scanning=true;scanAt=tick;}else scanError="scan_failed";
+  ESP_LOGI("network","Wi-Fi scan start: %s",esp_err_to_name(e));
  }
- if(scanning&&uint32_t(tick-scanAt)>15000){esp_wifi_scan_stop();scanning=false;lastError="scan_timeout";}
+ if(scanning&&!scanDone&&uint32_t(tick-scanAt)>15000){esp_wifi_scan_stop();scanning=false;scanError="scan_timeout";}
  if(scanDone.exchange(false)){
-  uint16_t count=24;std::vector<wifi_ap_record_t> records(count);if(esp_wifi_scan_get_ap_records(&count,records.data())==ESP_OK){auto list=scanResults.to<JsonArray>();for(unsigned i=0;i<count;i++){auto &v=records[i];if(!v.ssid[0])continue;bool duplicate=false;for(JsonObjectConst x:list)if(!strcmp(x["ssid"]|"",reinterpret_cast<char*>(v.ssid)))duplicate=true;if(duplicate)continue;auto o=list.createNestedObject();o["ssid"]=reinterpret_cast<char*>(v.ssid);o["rssi"]=v.rssi;o["secure"]=v.authmode!=WIFI_AUTH_OPEN;}}
+  uint16_t count=24;std::vector<wifi_ap_record_t> records(count);auto result=esp_wifi_scan_get_ap_records(&count,records.data());if(result==ESP_OK){auto list=scanResults.to<JsonArray>();for(unsigned i=0;i<count;i++){auto &v=records[i];if(!v.ssid[0])continue;bool duplicate=false;for(JsonObjectConst x:list)if(!strcmp(x["ssid"]|"",reinterpret_cast<char*>(v.ssid)))duplicate=true;if(duplicate)continue;auto o=list.createNestedObject();o["ssid"]=reinterpret_cast<char*>(v.ssid);o["rssi"]=v.rssi;o["secure"]=v.authmode!=WIFI_AUTH_OPEN;}}else scanError="scan_failed";
+  scanning=false;
+  ESP_LOGI("network","Wi-Fi scan results: %s, %u visible",esp_err_to_name(result),(unsigned)scanResults.size());
  }
- if(!wifiOnline&&!connecting&&!scanning&&!configuredSsid.empty()&&networkDue(tick,retryAt)){if(attempts<5)++attempts;else{phase="retrying";setupMode(true);}connectAt=tick;connecting=esp_wifi_connect()==ESP_OK;if(!connecting)retryAt=tick+networkRetryDelay(attempts);}
+ if(!holdSetupForTest&&!wifiOnline&&!connecting&&!scanning&&!configuredSsid.empty()&&networkDue(tick,retryAt)){if(attempts<5)++attempts;else{phase="retrying";setupMode(true);}connectAt=tick;connecting=esp_wifi_connect()==ESP_OK;if(!connecting)retryAt=tick+networkRetryDelay(attempts);}
  if(connecting&&uint32_t(tick-connectAt)>20000){esp_wifi_disconnect();connecting=false;retryAt=tick+networkRetryDelay(attempts);lastError="connect_timeout";}
  if(ap&&wifiOnline&&closeAt&&int32_t(tick-closeAt)>=0)setupMode(false);
 }
