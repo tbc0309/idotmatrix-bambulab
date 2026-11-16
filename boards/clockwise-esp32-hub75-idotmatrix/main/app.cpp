@@ -57,7 +57,7 @@ extern "C" void app_main() {
     HUB75_I2S_CFG config(side, side, 1);
     config.gpio = {25, 26, 27, 14, 12, 13, 23, 19, 5, 17, 18, 4, outputEnable, 16};
     config.clkphase = false;
-    config.setPixelColorDepthBits(6);
+    config.setPixelColorDepthBits(8);
     panel.setCfg(config);
     if (!panel.begin()) {
         ESP_LOGE("clockwise", "Unable to initialize HUB75 DMA");
