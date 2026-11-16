@@ -22,6 +22,9 @@ static httpd_handle_t http;
 static dns_server_handle_t dns;
 static atomic_bool associated;
 static atomic_bool saved;
+static atomic_uint retries;
+static atomic_bool joining;
+static atomic_bool station_configured;
 static int64_t close_after;
 static bool portal_active;
 static const char *tag = "clockwise_wifi";
@@ -58,8 +61,7 @@ static esp_err_t home(httpd_req_t *req) {
 
 static esp_err_t scan(httpd_req_t *req) {
     if (!from_ap(req)) return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, NULL);
-    const wifi_scan_config_t config = {.scan_time.active = {.min = 30, .max = 75}};
-    if (esp_wifi_scan_start(&config, true) != ESP_OK)
+    if (esp_wifi_scan_start(NULL, true) != ESP_OK)
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Scan unavailable");
     wifi_ap_record_t records[12];
     uint16_t count = sizeof(records) / sizeof(records[0]);
@@ -120,6 +122,9 @@ static esp_err_t submit(httpd_req_t *req) {
     if (esp_wifi_set_config(WIFI_IF_STA, &config) != ESP_OK)
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid Wi-Fi details");
     saved = false;
+    retries = 0;
+    station_configured = true;
+    joining = true;
     const esp_err_t result = httpd_resp_sendstr(req, "Connecting. Reopen the setup page to retry if needed.");
     esp_wifi_connect();
     return result;
@@ -145,6 +150,47 @@ static void got_ip(void *arg, esp_event_base_t base, int32_t id, void *data) {
         nvs_close(storage);
     }
     associated = true;
+    joining = false;
+}
+
+static void disconnected(void *arg, esp_event_base_t base, int32_t id, void *data) {
+    (void)arg; (void)base; (void)id;
+    const wifi_event_sta_disconnected_t *event = data;
+    associated = false;
+    ESP_LOGW(tag, "STA disconnected (reason=%u)", event->reason);
+    if (event->reason == WIFI_REASON_ASSOC_LEAVE) return;
+    if (station_configured && atomic_fetch_add(&retries, 1) < 4) {
+        joining = esp_wifi_connect() == ESP_OK;
+    } else {
+        joining = false;
+    }
+}
+
+static bool restore_station(wifi_sta_config_t *station) {
+    nvs_handle_t storage;
+    if (nvs_open(storage_name, NVS_READONLY, &storage) == ESP_OK) {
+        size_t size = sizeof(*station);
+        const bool found = nvs_get_blob(storage, "sta", station, &size) == ESP_OK &&
+                           size == sizeof(*station) && station->ssid[0];
+        nvs_close(storage);
+        if (found) {
+            saved = true;
+            return true;
+        }
+    }
+    struct {
+        char ssid[33], password[65], zone[64];
+    } legacy = {0};
+    if (nvs_open("cw-wifi", NVS_READONLY, &storage) != ESP_OK) return false;
+    size_t size = sizeof(legacy);
+    const bool found = nvs_get_blob(storage, "profile", &legacy, &size) == ESP_OK &&
+                       size == sizeof(legacy) && legacy.ssid[0] &&
+                       legacy.ssid[32] == 0 && legacy.password[64] == 0;
+    nvs_close(storage);
+    if (!found) return false;
+    memcpy(station->ssid, legacy.ssid, sizeof(station->ssid));
+    memcpy(station->password, legacy.password, sizeof(station->password));
+    return true;
 }
 
 void clockwise_wifi_start(void) {
@@ -156,6 +202,7 @@ void clockwise_wifi_start(void) {
     ESP_ERROR_CHECK(esp_wifi_init(&init));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, got_ip, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, disconnected, NULL));
     wifi_config_t config = {0}, station = {0};
     uint8_t mac[6];
     ESP_ERROR_CHECK(esp_read_mac(mac, ESP_MAC_BT));
@@ -172,6 +219,7 @@ void clockwise_wifi_start(void) {
     uint8_t offer_dns = 2;
     ESP_ERROR_CHECK(esp_netif_dhcps_option(ap, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER, &offer_dns, sizeof(offer_dns)));
     ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     static dns_server_config_t dns_config = DNS_SERVER_CONFIG_SINGLE("*", "WIFI_AP_DEF");
     dns = start_dns_server(&dns_config);
     httpd_config_t settings = HTTPD_DEFAULT_CONFIG();
@@ -189,22 +237,23 @@ void clockwise_wifi_start(void) {
             ESP_ERROR_CHECK(httpd_register_uri_handler(http, &handlers[i]));
     }
     portal_active = true;
-    nvs_handle_t storage;
-    if (nvs_open(storage_name, NVS_READONLY, &storage) == ESP_OK) {
-        size_t size = sizeof(station.sta);
-        saved = nvs_get_blob(storage, "sta", &station.sta, &size) == ESP_OK && size == sizeof(station.sta) && station.sta.ssid[0];
-        nvs_close(storage);
-        if (saved && esp_wifi_set_config(WIFI_IF_STA, &station) == ESP_OK) esp_wifi_connect();
+    if (restore_station(&station.sta) && esp_wifi_set_config(WIFI_IF_STA, &station) == ESP_OK) {
+        station_configured = true;
+        joining = esp_wifi_connect() == ESP_OK;
     }
 }
 
 bool clockwise_wifi_has_setup_client(void) {
     wifi_sta_list_t stations;
-    return portal_active && esp_wifi_ap_get_sta_list(&stations) == ESP_OK && stations.num > 0;
+    return portal_active && (joining || associated ||
+           (esp_wifi_ap_get_sta_list(&stations) == ESP_OK && stations.num > 0));
 }
 
 void clockwise_wifi_poll(void) {
-    if (!associated) return;
+    if (!associated) {
+        close_after = 0;
+        return;
+    }
     static bool sntp_started;
     if (!sntp_started) {
         esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
@@ -212,7 +261,10 @@ void clockwise_wifi_poll(void) {
     }
     if (sntp_started && esp_netif_sntp_sync_wait(0) == ESP_OK) {
         const time_t now = time(NULL);
-        if (now >= 1704067200) clockwise_set_clock((now + 8 * 3600) % 86400);
+        if (now >= 1704067200) {
+            clockwise_set_clock((now + 8 * 3600) % 86400);
+            ESP_LOGI(tag, "NTP synchronized (UTC+8)");
+        }
     }
     if (!portal_active || !saved) return;
     const int64_t now = esp_timer_get_time();
