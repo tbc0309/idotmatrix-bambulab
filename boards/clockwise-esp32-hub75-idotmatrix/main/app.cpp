@@ -1,4 +1,7 @@
 #include "app_state.h"
+#if CLOCKWISE_WITH_WIFI
+#include "portal.h"
+#endif
 #include "ESP32-HUB75-MatrixPanel-I2S-DMA.h"
 #include "lvgl.h"
 #include <algorithm>
@@ -11,6 +14,9 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <nvs_flash.h>
+
+static_assert(LVGL_VERSION_MAJOR == 9 && LVGL_VERSION_MINOR == 6 && LVGL_VERSION_PATCH == 0,
+              "Clockwise requires LVGL 9.6.0");
 
 namespace {
 constexpr unsigned side = 64;
@@ -72,6 +78,10 @@ extern "C" void app_main() {
     lv_obj_center(clock);
     lv_label_set_text(clock, "--:--");
     clockwise_ble_start();
+#if CLOCKWISE_WITH_WIFI
+    clockwise_wifi_start();
+    bool setupPaused = false;
+#endif
     ESP_LOGI("clockwise", "HUB75/LVGL ready, heap=%zu largest=%zu",
              heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
@@ -79,6 +89,21 @@ extern "C" void app_main() {
     unsigned lastDuty = 256;
     uint32_t lastMinute = UINT32_MAX;
     for (;;) {
+#if CLOCKWISE_WITH_WIFI
+        clockwise_wifi_poll();
+        if (clockwise_wifi_has_setup_client()) {
+            if (!setupPaused) {
+                panel.clearScreen();
+                setupPaused = true;
+            }
+            vTaskDelay(pdMS_TO_TICKS(40));
+            continue;
+        }
+        if (setupPaused) {
+            lv_obj_invalidate(screen);
+            setupPaused = false;
+        }
+#endif
         const unsigned duty = powered ? (brightness.load() * maxDuty + 50) / 100 : 0;
         if (lastDuty != duty) {
             panel.setBrightness8(duty);

@@ -49,7 +49,7 @@ static int access(uint16_t connection, uint16_t attribute, struct ble_gatt_acces
     return 0;
 }
 
-static const struct ble_gatt_dsc_def description[] = {
+static struct ble_gatt_dsc_def description[] = {
     {.uuid = BLE_UUID16_DECLARE(0x2901), .att_flags = BLE_ATT_F_READ, .access_cb = access}, {0}
 };
 static const struct ble_gatt_chr_def characteristics[] = {
@@ -70,6 +70,10 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT:
         if (event->connect.status) advertise();
+        break;
+    case BLE_GAP_EVENT_SUBSCRIBE:
+        if (event->subscribe.attr_handle == notify_handle && event->subscribe.cur_notify)
+            notify(event->subscribe.conn_handle, device_info, sizeof(device_info));
         break;
     case BLE_GAP_EVENT_DISCONNECT:
     case BLE_GAP_EVENT_ADV_COMPLETE:
