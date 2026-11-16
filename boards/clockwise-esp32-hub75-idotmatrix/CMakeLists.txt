@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.22)
+set(IDF_TARGET esp32)
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(clockwise_app_idf)
+if(NOT IDF_VERSION_MAJOR EQUAL 6 OR NOT IDF_VERSION_MINOR EQUAL 1)
+    message(FATAL_ERROR "Clockwise requires ESP-IDF 6.1")
+endif()
