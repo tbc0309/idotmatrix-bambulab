@@ -4,8 +4,8 @@
   "boardName": "Clockwise ESP32 + HUB75 64×64 · iDotMatrix App",
   "target": "esp32",
   "project": "idotmatrix-bambulab",
-  "projectName": "arduino-lib-builder",
+  "projectName": "clockwise_app_idf",
   "appSlotBytes": 1966080,
-  "size": 889856,
-  "sha256": "5a587ec9dc18d9771b55a664840c2d68924314a7a9b816d636261d72d35d1d9b"
+  "size": 1409104,
+  "sha256": "5e1b6fc70dcdb85c43cde2debdf175af20ff8dfbc690009b8c4623b5149bf985"
 }
