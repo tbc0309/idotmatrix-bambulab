@@ -1,0 +1,13 @@
+{
+  "project": "idotmatrix-bambulab",
+  "version": "1.0.2",
+  "board": "esp32c3-rgb24",
+  "boardName": "ESP32-C3 24 RGB Ring",
+  "projectName": "idotmatrix_bambulab",
+  "target": "esp32c3",
+  "flashBytes": 4194304,
+  "appSlotBytes": 1966080,
+  "url": "https://github.com/tbc0309/idotmatrix-bambulab/releases/download/1.0.2/esp32c3-rgb24.bin",
+  "size": 1671968,
+  "sha256": "948244d1132fe31c8f80f8e213d2d9b66fb2c8d8b13a1bdb91e4cdb06a8117dc"
+}

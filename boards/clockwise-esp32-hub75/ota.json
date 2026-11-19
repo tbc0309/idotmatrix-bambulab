@@ -1,0 +1,13 @@
+{
+  "project": "idotmatrix-bambulab",
+  "version": "1.0.2",
+  "board": "clockwise-esp32-hub75",
+  "boardName": "Clockwise ESP32 + HUB75 64x64",
+  "projectName": "idotmatrix_bambulab",
+  "target": "esp32",
+  "flashBytes": 4194304,
+  "appSlotBytes": 1966080,
+  "url": "https://github.com/tbc0309/idotmatrix-bambulab/releases/download/1.0.2/clockwise-esp32-hub75.bin",
+  "size": 1348480,
+  "sha256": "ebb4930d5878343d6f786727e29ce68d480975a420d80415b3230b26666deed9"
+}

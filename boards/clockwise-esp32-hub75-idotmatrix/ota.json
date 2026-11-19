@@ -1,0 +1,11 @@
+{
+  "version": "1.0.2",
+  "board": "clockwise-esp32-hub75-idotmatrix",
+  "boardName": "Clockwise ESP32 + HUB75 64×64 · iDotMatrix App",
+  "target": "esp32",
+  "project": "idotmatrix-bambulab",
+  "projectName": "clockwise_app_idf",
+  "appSlotBytes": 1966080,
+  "size": 1402944,
+  "sha256": "5350ab2c2823a6a3252e2db06c85ee6210e63369bd089753d9de15f119d5bcfb"
+}
