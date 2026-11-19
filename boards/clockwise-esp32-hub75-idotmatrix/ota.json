@@ -1,7 +1,7 @@
 {
   "version": "1.0.2",
   "board": "clockwise-esp32-hub75-idotmatrix",
-  "boardName": "Clockwise ESP32 + HUB75 64脳64 路 iDotMatrix App",
+  "boardName": "Clockwise ESP32 + HUB75 64×64 · iDotMatrix App",
   "target": "esp32",
   "project": "idotmatrix-bambulab",
   "projectName": "clockwise_app_idf",
