@@ -385,6 +385,7 @@ extern "C" uint8_t clockwise_accept_media(const uint8_t *data, size_t size) {
     // A fresh upload can follow a canceled one on the same BLE connection.
     if (receiving >= 0 && data[4] == 0) abortTransfer();
     if (receiving < 0) {
+        if (data[4] != 0) return 3;
         pruneDirect();
         receiving = open(staging, O_WRONLY | O_CREAT | O_TRUNC, 0600);
         if (receiving < 0) {

@@ -114,6 +114,13 @@ static esp_err_t status(httpd_req_t *req) {
 
 static esp_err_t scan(httpd_req_t *req) {
     if (!accessible(req)) return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, NULL);
+    // Only the HTTP server task serves this handler.
+    static char cached[12 * 97];
+    static size_t cached_len;
+    static int64_t valid_until;
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    if (cached_len && esp_timer_get_time() < valid_until)
+        return httpd_resp_send(req, cached, cached_len);
     wifi_scan_config_t settings = {
         .scan_type = WIFI_SCAN_TYPE_ACTIVE,
         .scan_time.active = {.min = 20, .max = 40},
@@ -126,6 +133,7 @@ static esp_err_t scan(httpd_req_t *req) {
     const esp_err_t result = esp_wifi_scan_get_ap_records(&count, records);
     esp_wifi_clear_ap_list();
     if (result != ESP_OK) return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Scan unavailable");
+    cached_len = 0;
     for (uint16_t i = 0; i < count; ++i) {
         char encoded[98];
         size_t length = 0;
@@ -135,9 +143,11 @@ static esp_err_t scan(httpd_req_t *req) {
         }
         if (!length) continue;
         encoded[length++] = ' ';
-        if (httpd_resp_send_chunk(req, encoded, length) != ESP_OK) return ESP_FAIL;
+        memcpy(cached + cached_len, encoded, length);
+        cached_len += length;
     }
-    return httpd_resp_send_chunk(req, NULL, 0);
+    valid_until = esp_timer_get_time() + 10000000;
+    return httpd_resp_send(req, cached, cached_len);
 }
 
 static bool form_value(const char *body, const char *key, uint8_t *out, size_t capacity) {

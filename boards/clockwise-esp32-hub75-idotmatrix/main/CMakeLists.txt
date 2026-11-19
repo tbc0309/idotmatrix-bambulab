@@ -7,7 +7,7 @@ if("$ENV{CW_NATIVE_WIFI}" STREQUAL "ON")
     set(WIFI_REQUIRES esp_wifi esp_netif esp_event esp_http_server lwip)
 endif()
 set(HUB75 "${CMAKE_CURRENT_LIST_DIR}/../../clockwise-esp32-hub75/vendor/src")
-idf_component_register(SRCS "app.cpp" "ble.c" "effects.cpp" "media.cpp" "text_media.cpp" "clock_view.cpp" "rhythm.cpp" "events.cpp" ${PORTAL_SOURCES}
+idf_component_register(SRCS "app.cpp" "canvas_gif.cpp" "ble.c" "effects.cpp" "media.cpp" "text_media.cpp" "clock_view.cpp" "rhythm.cpp" "events.cpp" ${PORTAL_SOURCES}
     "${HUB75}/ESP32-HUB75-MatrixPanel-I2S-DMA.cpp"
     "${HUB75}/ESP32-HUB75-MatrixPanel-leddrivers.cpp"
     "${HUB75}/platforms/esp32/esp32_i2s_parallel_dma.cpp"

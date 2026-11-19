@@ -1,3 +1,4 @@
+#include "canvas_gif.h"
 #include "lvgl_private.h"
 #include "app_state.h"
 #include "text_media.h"
@@ -88,9 +89,6 @@ struct TimerState {
 struct Pixel { uint8_t r, g, b; };
 alignas(LV_DRAW_BUF_ALIGN) Pixel frame[side * side];
 static_assert(sizeof(Pixel) == 3);
-bool useFrameForGif;
-lv_draw_buf_malloc_cb_t defaultDrawAlloc;
-lv_draw_buf_free_cb_t defaultDrawFree;
 void writeFramePixel(unsigned x, unsigned y, uint8_t r, uint8_t g, uint8_t b) {
     if (x < side && y < side) frame[y * side + x] = {r, g, b};
 }
@@ -158,7 +156,7 @@ bool inflateGraffitiRows(FILE *file, size_t remaining, tinfl_decompressor &decod
     return false;
 }
 
-bool restoreGraffitiPng(const char *path) {
+bool restoreGraffitiPng(const char *path, bool reuseFrame = false) {
     FILE *file = fopen(path, "rb");
     if (!file) return false;
     fseek(file, 0, SEEK_END);
@@ -177,14 +175,20 @@ bool restoreGraffitiPng(const char *path) {
     uint8_t *rows = nullptr;
     const size_t stride = width * channels + 1;
     if (valid) {
-        auto *decoder = static_cast<tinfl_decompressor *>(malloc(sizeof(tinfl_decompressor)));
+        static_assert(sizeof(tinfl_decompressor) <= sizeof(frame));
+        static_assert(alignof(tinfl_decompressor) <= LV_DRAW_BUF_ALIGN);
+        auto *decoder = reuseFrame ? ::new (static_cast<void *>(frame)) tinfl_decompressor :
+                                     static_cast<tinfl_decompressor *>(malloc(sizeof(tinfl_decompressor)));
         rows = static_cast<uint8_t *>(malloc(stride * height));
         if (!decoder || !rows)
             ESP_LOGW("media", "PNG inflate allocation failed, largest=%zu",
-                     heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+                     heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
         valid = decoder && rows && inflateGraffitiRows(file, size - sizeof(header), *decoder,
                                                        rows, stride * height);
-        free(decoder);
+        if (reuseFrame) {
+            decoder->~tinfl_decompressor();
+            for (auto &pixel : frame) ::new (static_cast<void *>(&pixel)) Pixel{};
+        } else free(decoder);
     }
     fclose(file);
     for (unsigned y = 0; valid && y < height; ++y) {
@@ -341,19 +345,6 @@ extern "C" void app_main() {
     }
     panel.clearScreen();
     lv_init();
-    auto *drawHandlers = lv_draw_buf_get_handlers();
-    defaultDrawAlloc = drawHandlers->buf_malloc_cb;
-    defaultDrawFree = drawHandlers->buf_free_cb;
-    drawHandlers->buf_malloc_cb = [](size_t size, lv_color_format_t format) -> void * {
-        if (useFrameForGif && format == LV_COLOR_FORMAT_RGB888 && size <= sizeof(frame)) {
-            useFrameForGif = false;
-            return frame;
-        }
-        return defaultDrawAlloc(size, format);
-    };
-    drawHandlers->buf_free_cb = [](void *buffer) {
-        if (buffer != frame) defaultDrawFree(buffer);
-    };
     lv_tick_set_cb(lvTicks);
     auto *display = lv_display_create(side, side);
     if (!display) return;
@@ -375,7 +366,7 @@ extern "C" void app_main() {
 #endif
     ESP_LOGI("clockwise", "HUB75/LVGL ready, heap=%zu largest=%zu",
              heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-             heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+             heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
 
     unsigned lastDuty = 256;
     bool lastSolid = false;
@@ -409,22 +400,20 @@ extern "C" void app_main() {
     const uint8_t *currentMedia = nullptr;
     bool showingContent = false;
     lv_obj_t *mediaWidget = nullptr;
-    const lv_draw_buf_t *gifFrame = nullptr;
+    static CanvasGif gif;
     char source[42]{};
     int mediaSlot = -1;
     View eventPreviousView = View::Clock;
     char normalMedia[40]{};
     bool normalGraffitiPng = false;
     bool eventActive = false;
+    volatile uint32_t *savedCanvas = nullptr;
     unsigned rawSide = side;
     TextMedia textMedia;
     uint32_t textStarted = 0, nextTextFrame = 0;
     auto stopMedia = [&]() {
         textMedia.clear();
-        if (gifFrame) {
-            gifFrame = nullptr;
-            lv_display_enable_invalidation(display, true);
-        }
+        gif.close();
         if (mediaWidget) lv_obj_delete(mediaWidget);
         mediaWidget = nullptr;
         currentMedia = nullptr;
@@ -551,11 +540,29 @@ extern "C" void app_main() {
         bool graffitiPng = false;
         const bool resuming = event == EventChange::End;
         if (event == EventChange::Start) {
-            if (!eventActive) eventPreviousView = view;
+            if (!eventActive) {
+                eventPreviousView = view;
+                if (view == View::Graffiti) {
+                    savedCanvas = static_cast<uint32_t *>(heap_caps_malloc_prefer(sizeof(frame), 2, MALLOC_CAP_EXEC | MALLOC_CAP_32BIT, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+                    if (savedCanvas) for (size_t i = 0; i < sizeof(frame) / 4; ++i) {
+                        uint32_t word;
+                        memcpy(&word, reinterpret_cast<const uint8_t *>(frame) + 4 * i, 4);
+                        savedCanvas[i] = word;
+                    }
+                }
+            }
             eventActive = true;
             nextMedia = true;
         } else if (resuming) {
             eventActive = false;
+            if (savedCanvas) {
+                for (size_t i = 0; i < sizeof(frame) / 4; ++i) {
+                    const uint32_t word = savedCanvas[i];
+                    memcpy(reinterpret_cast<uint8_t *>(frame) + 4 * i, &word, 4);
+                }
+                heap_caps_free(const_cast<uint32_t *>(savedCanvas));
+                savedCanvas = nullptr;
+            }
             if (normalMedia[0]) {
                 memcpy(path, normalMedia, sizeof(path));
                 graffitiPng = normalGraffitiPng;
@@ -581,38 +588,20 @@ extern "C" void app_main() {
             stopMedia();
             clockwise_effect_stop();
             const int format = clockwise_media_format(path);
-            ESP_LOGI("media", "Playback format=%d, heap=%zu largest=%zu", format,
-                     heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-                     heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-            const bool synchronousDecode = format == 1 || (format == 2 && graffitiPng) || format == 3 || format == 4;
-            const bool measuring = synchronousDecode && heap_caps_monitor_local_minimum_free_size_start() == ESP_OK;
             switch (format) {
             case 1:
-                snprintf(source, sizeof(source), "M:%s", path);
-                mediaWidget = lv_gif_create(screen);
-                if (mediaWidget) {
-                    lv_gif_set_color_format(mediaWidget, LV_COLOR_FORMAT_RGB888);
-                    useFrameForGif = true;
-                    lv_gif_set_src(mediaWidget, source);
-                    useFrameForGif = false;
-                    if (!lv_gif_is_loaded(mediaWidget)) {
-                        ESP_LOGW("media", "GIF decoder could not open %s, largest=%zu", path,
-                                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-                        stopMedia();
-                    } else {
-                        lv_gif_set_loop_count(mediaWidget, 0);
-                        gifFrame = static_cast<const lv_draw_buf_t *>(lv_image_get_src(mediaWidget));
-                        // The GIF decoder already composites RGB888 pixels. Send them
-                        // directly to HUB75 without allocating LVGL image draw tasks.
-                        lv_obj_set_hidden(mediaWidget, true);
-                        lv_display_enable_invalidation(display, false);
-                        lv_timer_pause(lv_display_get_refr_timer(display));
-                        ESP_LOGI("media", "GIF decoder loaded %s", path);
-                    }
-                }
+                if (gif.open(path, reinterpret_cast<uint8_t *>(frame)) && gif.advance(now)) {
+                    presentFrame();
+                    ESP_LOGI("media", "GIF decoder loaded %s", path);
+                } else ESP_LOGW("media", "GIF could not open %s", path);
                 break;
             case 2:
                 snprintf(source, sizeof(source), "M:%s", path);
+                if (eventActive && restoreGraffitiPng(path, true)) {
+                    rawSide = side;
+                    currentMedia = reinterpret_cast<const uint8_t *>(frame);
+                    break;
+                }
                 if (graffitiPng) {
                     if (restoreGraffitiPng(path)) view = View::Graffiti;
                     break;
@@ -634,19 +623,12 @@ extern "C" void app_main() {
                 }
                 break;
             }
-            if (measuring) {
-                const auto minimum = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
-                heap_caps_monitor_local_minimum_free_size_stop();
-                ESP_LOGI("media", "Decode format=%d minimum=%zu remaining=%zu largest=%zu", format, minimum,
-                         heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-                         heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-            }
             if (mediaWidget) {
                 lv_obj_set_hidden(clock, true);
                 lv_obj_center(mediaWidget);
             }
             lv_obj_invalidate(screen);
-        } else if (effect && (currentMedia || mediaWidget || textMedia.bytes)) {
+        } else if (effect && (gif.active() || currentMedia || mediaWidget || textMedia.bytes)) {
             stopMedia();
         }
         if (!eventActive && renderRhythm(writeFramePixel, now)) {
@@ -659,14 +641,12 @@ extern "C" void app_main() {
         }
         portENTER_CRITICAL(&graffitiLock);
         const bool graffiti = selectGraffiti && !eventActive;
-        if (selectGraffiti) {
-            if (graffiti) {
-                if (clearGraffiti || view != View::Graffiti)
-                    std::fill_n(frame, side * side, Pixel{});
-                for (unsigned i = 0; i < strokeCount; ++i) {
-                    const auto &point = stroke[i];
-                    frame[point.y * side + point.x] = point.color;
-                }
+        if (graffiti) {
+            if (clearGraffiti || view != View::Graffiti)
+                std::fill_n(frame, side * side, Pixel{});
+            for (unsigned i = 0; i < strokeCount; ++i) {
+                const auto &point = stroke[i];
+                frame[point.y * side + point.x] = point.color;
             }
             strokeCount = 0;
             clearGraffiti = selectGraffiti = false;
@@ -728,19 +708,10 @@ extern "C" void app_main() {
             vTaskDelay(pdMS_TO_TICKS(15));
             continue;
         }
-        if (gifFrame) {
-            lv_timer_handler();
-            const auto &header = gifFrame->header;
-            const int left = (side - header.w) / 2;
-            const int top = (side - header.h) / 2;
-            if (!showingContent && (header.w != side || header.h != side)) panel.clearScreen();
-            for (unsigned y = 0; y < header.h; ++y) {
-                const auto *colors = reinterpret_cast<const lv_color_t *>(gifFrame->data + y * header.stride);
-                for (unsigned x = 0; x < header.w; ++x)
-                    drawPixel(left + x, top + y, colors[x].red, colors[x].green, colors[x].blue);
-            }
+        if (gif.active()) {
+            if (gif.advance(now)) presentFrame();
             showingContent = true;
-            vTaskDelay(pdMS_TO_TICKS(15));
+            vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
         if (showingContent && (mediaWidget || (view == View::Clock && !clockSet))) {
