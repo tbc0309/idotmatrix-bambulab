@@ -272,7 +272,10 @@ extern "C" bool clockwise_graffiti_submit(const uint8_t *data, size_t size) {
         if (size != 5) return false;
         if (data[4] != 1 && data[4] != 3) return true;
     }
-    if (data[2] == 5 && (size < 10 || size % 2)) return false;
+    // iOS sends one coordinate pair followed by a sequence byte.
+    // The other form carries one or more coordinate pairs without a trailer.
+    const size_t pointsEnd = data[2] == 5 && size == 11 ? 10 : size;
+    if (data[2] == 5 && (pointsEnd < 10 || pointsEnd % 2)) return false;
     portENTER_CRITICAL(&graffitiLock);
     selectGraffiti = true;
     if (data[2] == 4 && data[4] == 1) {
@@ -280,11 +283,11 @@ extern "C" bool clockwise_graffiti_submit(const uint8_t *data, size_t size) {
         strokeCount = 0;
     }
     if (data[2] == 5) {
-        if ((size - 8) / 2 > std::size(stroke) - strokeCount) {
+        if ((pointsEnd - 8) / 2 > std::size(stroke) - strokeCount) {
             portEXIT_CRITICAL(&graffitiLock);
             return false;
         }
-        for (size_t i = 8; i < size; i += 2)
+        for (size_t i = 8; i < pointsEnd; i += 2)
             if (data[i] < side && data[i + 1] < side)
                 stroke[strokeCount++] = {data[i], data[i + 1], {data[5], data[6], data[7]}};
     }
